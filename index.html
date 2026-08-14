@@ -18,6 +18,12 @@
         </label>
         <button type="button" id="reroll">随机一局</button>
         <button type="button" id="reset-view">重置视图</button>
+        <label class="field seed-field">
+          种子
+          <input id="seed-input" type="text" spellcheck="false" autocomplete="off" />
+        </label>
+        <button type="button" id="copy-seed">复制</button>
+        <button type="button" id="load-seed">加载</button>
         <span class="status" id="status" aria-live="polite"></span>
       </header>
       <canvas id="game" tabindex="0" aria-label="解缠画布"></canvas>

@@ -1,5 +1,6 @@
 import { findCrossings, isSolved } from '../core/crossings';
 import { clampVertexCount, createDeal } from '../core/generate';
+import { decodeSeed, encodeSeed } from '../core/seed';
 import type { Deal } from '../core/types';
 import { VERTEX_COUNT_A0_CAP, VERTEX_COUNT_MIN } from '../core/types';
 import { Camera } from '../view/camera';
@@ -7,7 +8,7 @@ import { attachInput } from '../view/input';
 import { renderDeal, resetCameraToDeal } from '../view/renderer';
 
 /**
- * 组装 A0 可玩循环：生成、交互、通关、工具栏。
+ * 组装可玩循环：生成、种子复现、交互、通关、工具栏。
  */
 export class GameApp {
   private readonly canvas: HTMLCanvasElement;
@@ -15,12 +16,14 @@ export class GameApp {
   private readonly camera = new Camera();
   private readonly statusEl: HTMLElement;
   private readonly vertexCountInput: HTMLInputElement;
+  private readonly seedInput: HTMLInputElement;
 
   private deal: Deal;
   private solved = false;
   private activeVertexId: number | null = null;
   private needsDraw = true;
   private running = false;
+  private statusFlash: string | null = null;
 
   /**
    * 从页面根节点绑定画布与工具栏控件。
@@ -29,10 +32,22 @@ export class GameApp {
     const canvas = root.querySelector<HTMLCanvasElement>('#game');
     const statusEl = root.querySelector<HTMLElement>('#status');
     const vertexCountInput = root.querySelector<HTMLInputElement>('#vertex-count');
+    const seedInput = root.querySelector<HTMLInputElement>('#seed-input');
     const rerollBtn = root.querySelector<HTMLButtonElement>('#reroll');
     const resetViewBtn = root.querySelector<HTMLButtonElement>('#reset-view');
+    const copySeedBtn = root.querySelector<HTMLButtonElement>('#copy-seed');
+    const loadSeedBtn = root.querySelector<HTMLButtonElement>('#load-seed');
 
-    if (!canvas || !statusEl || !vertexCountInput || !rerollBtn || !resetViewBtn) {
+    if (
+      !canvas ||
+      !statusEl ||
+      !vertexCountInput ||
+      !seedInput ||
+      !rerollBtn ||
+      !resetViewBtn ||
+      !copySeedBtn ||
+      !loadSeedBtn
+    ) {
       throw new Error('页面缺少必要的 #game / 工具栏节点');
     }
 
@@ -45,6 +60,7 @@ export class GameApp {
     this.ctx = ctx;
     this.statusEl = statusEl;
     this.vertexCountInput = vertexCountInput;
+    this.seedInput = seedInput;
 
     vertexCountInput.min = String(VERTEX_COUNT_MIN);
     vertexCountInput.max = String(VERTEX_COUNT_A0_CAP);
@@ -52,10 +68,21 @@ export class GameApp {
     const initialCount = clampVertexCount(Number(vertexCountInput.value) || 8);
     vertexCountInput.value = String(Math.min(VERTEX_COUNT_A0_CAP, initialCount));
     this.deal = createDeal(Number(vertexCountInput.value));
+    this.syncSeedField();
 
     rerollBtn.addEventListener('click', () => this.reroll());
     resetViewBtn.addEventListener('click', () => this.resetView());
     vertexCountInput.addEventListener('change', () => this.reroll());
+    copySeedBtn.addEventListener('click', () => {
+      void this.copySeed();
+    });
+    loadSeedBtn.addEventListener('click', () => this.loadSeedFromInput());
+    seedInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        this.loadSeedFromInput();
+      }
+    });
 
     window.addEventListener('resize', () => this.resize());
     window.visualViewport?.addEventListener('resize', () => this.resize());
@@ -91,18 +118,51 @@ export class GameApp {
   }
 
   /**
-   * 按当前顶点数重新生成一局。
+   * 按当前顶点数重新生成一局，并刷新种子。
    */
   public reroll(): void {
     let n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
     n = Math.min(VERTEX_COUNT_A0_CAP, n);
     this.vertexCountInput.value = String(n);
-    this.deal = createDeal(n);
-    this.solved = false;
-    this.activeVertexId = null;
-    this.resetView();
-    this.updateStatus();
-    this.markDirty();
+    this.applyDeal(createDeal(n));
+  }
+
+  /**
+   * 从种子输入框加载并复现同一局。
+   */
+  public loadSeedFromInput(): void {
+    const payload = decodeSeed(this.seedInput.value);
+    if (!payload) {
+      this.flashStatus('种子无效，格式如 v1-8-a1b2c3d4');
+      return;
+    }
+
+    let n = clampVertexCount(payload.vertexCount);
+    n = Math.min(VERTEX_COUNT_A0_CAP, n);
+    if (n !== payload.vertexCount) {
+      this.flashStatus(`顶点数已限制为 ${n}（A0 上限 ${VERTEX_COUNT_A0_CAP}）`);
+    }
+
+    this.vertexCountInput.value = String(n);
+    this.applyDeal(createDeal(n, payload.generationSeed));
+    if (!this.statusFlash) {
+      this.flashStatus('已按种子加载');
+    }
+  }
+
+  /**
+   * 复制当前种子到剪贴板。
+   */
+  public async copySeed(): Promise<void> {
+    const text = encodeSeed(this.deal.vertices.length, this.deal.generationSeed);
+    this.seedInput.value = text;
+    try {
+      await navigator.clipboard.writeText(text);
+      this.flashStatus('种子已复制');
+    } catch {
+      this.seedInput.select();
+      this.flashStatus('无法写剪贴板，请手动复制种子框');
+    }
   }
 
   /**
@@ -111,6 +171,43 @@ export class GameApp {
   public resetView(): void {
     resetCameraToDeal(this.camera, this.deal);
     this.markDirty();
+  }
+
+  /**
+   * 应用新局并重置通关/视图/种子展示。
+   */
+  private applyDeal(deal: Deal): void {
+    this.deal = deal;
+    this.solved = false;
+    this.activeVertexId = null;
+    this.syncSeedField();
+    this.resetView();
+    this.updateStatus();
+    this.markDirty();
+  }
+
+  /**
+   * 把当前局的种子同步到输入框。
+   */
+  private syncSeedField(): void {
+    this.seedInput.value = encodeSeed(
+      this.deal.vertices.length,
+      this.deal.generationSeed,
+    );
+  }
+
+  /**
+   * 短暂覆盖状态栏文案。
+   */
+  private flashStatus(message: string): void {
+    this.statusFlash = message;
+    this.updateStatus();
+    window.setTimeout(() => {
+      if (this.statusFlash === message) {
+        this.statusFlash = null;
+        this.updateStatus();
+      }
+    }, 1800);
   }
 
   /**
@@ -174,6 +271,10 @@ export class GameApp {
    * 根据交叉数与通关态刷新工具栏状态。
    */
   private updateStatus(): void {
+    if (this.statusFlash) {
+      this.statusEl.textContent = this.statusFlash;
+      return;
+    }
     if (this.solved) {
       this.statusEl.textContent = '已解开！可点「随机一局」继续';
       return;
@@ -181,5 +282,4 @@ export class GameApp {
     const crossings = findCrossings(this.deal).length;
     this.statusEl.textContent = `顶点 ${this.deal.vertices.length} · 边 ${this.deal.edges.length} · 交叉 ${crossings}`;
   }
-
 }
