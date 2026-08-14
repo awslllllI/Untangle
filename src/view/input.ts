@@ -47,16 +47,20 @@ export function attachInput(
 
   /**
    * 在屏幕空间命中最近顶点；过远则返回 null。
+   * 命中半径按屏幕像素固定，大图靠缩放点选（与相机设计一致）。
    */
   function hitTestVertex(screen: Vec2, deal: Deal): number | null {
-    const hitRadius = 22;
+    const hitRadius = Math.max(16, Math.min(28, 20 + 4 / Math.max(0.35, camera.scale)));
+    const hitRadiusSq = hitRadius * hitRadius;
     let bestId: number | null = null;
-    let bestDist = hitRadius;
+    let bestDistSq = hitRadiusSq;
     for (const v of deal.vertices) {
       const p = camera.worldToScreen(v.position);
-      const d = distance(screen, p);
-      if (d <= bestDist) {
-        bestDist = d;
+      const dx = screen.x - p.x;
+      const dy = screen.y - p.y;
+      const dSq = dx * dx + dy * dy;
+      if (dSq <= bestDistSq) {
+        bestDistSq = dSq;
         bestId = v.id;
       }
     }

@@ -1,19 +1,24 @@
-import { findCrossings, isSolved } from '../core/crossings';
+import { CrossingTracker } from '../core/crossings';
 import { clampVertexCount, createDeal } from '../core/generate';
 import { decodeSeed, encodeSeed } from '../core/seed';
 import type { Deal } from '../core/types';
-import { VERTEX_COUNT_A0_CAP, VERTEX_COUNT_MIN } from '../core/types';
+import {
+  VERTEX_COUNT_HARD_CAP,
+  VERTEX_COUNT_MIN,
+  VERTEX_COUNT_PERF_HINT,
+} from '../core/types';
 import { Camera } from '../view/camera';
 import { attachInput } from '../view/input';
 import { renderDeal, resetCameraToDeal } from '../view/renderer';
 
 /**
- * 组装可玩循环：生成、种子复现、交互、通关、工具栏。
+ * 组装可玩循环：生成、种子复现、大图性能、交互、通关、工具栏。
  */
 export class GameApp {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly camera = new Camera();
+  private readonly crossings = new CrossingTracker();
   private readonly statusEl: HTMLElement;
   private readonly vertexCountInput: HTMLInputElement;
   private readonly seedInput: HTMLInputElement;
@@ -63,11 +68,13 @@ export class GameApp {
     this.seedInput = seedInput;
 
     vertexCountInput.min = String(VERTEX_COUNT_MIN);
-    vertexCountInput.max = String(VERTEX_COUNT_A0_CAP);
+    vertexCountInput.max = String(VERTEX_COUNT_HARD_CAP);
 
     const initialCount = clampVertexCount(Number(vertexCountInput.value) || 8);
-    vertexCountInput.value = String(Math.min(VERTEX_COUNT_A0_CAP, initialCount));
-    this.deal = createDeal(Number(vertexCountInput.value));
+    vertexCountInput.value = String(initialCount);
+    this.deal = createDeal(initialCount);
+    this.crossings.rebuild(this.deal);
+    this.solved = this.crossings.isSolved();
     this.syncSeedField();
 
     rerollBtn.addEventListener('click', () => this.reroll());
@@ -104,10 +111,11 @@ export class GameApp {
     this.resetView();
     attachInput(this.canvas, this.camera, () => this.deal, {
       onChange: () => {
-        this.checkSolved();
-        this.markDirty();
+        this.onGraphOrCameraChanged();
       },
-      onDragEnd: () => this.checkSolved(),
+      onDragEnd: () => {
+        this.refreshSolvedFromTracker();
+      },
       onActiveVertex: (vertexId: number | null) => {
         this.activeVertexId = vertexId;
         this.markDirty();
@@ -121,9 +129,15 @@ export class GameApp {
    * 按当前顶点数重新生成一局，并刷新种子。
    */
   public reroll(): void {
-    let n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
-    n = Math.min(VERTEX_COUNT_A0_CAP, n);
+    const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
     this.vertexCountInput.value = String(n);
+    if (n >= VERTEX_COUNT_PERF_HINT) {
+      this.flashStatus(`生成 ${n} 点局中…大图请用缩放点选`);
+      window.setTimeout(() => {
+        this.applyDeal(createDeal(n));
+      }, 0);
+      return;
+    }
     this.applyDeal(createDeal(n));
   }
 
@@ -137,10 +151,9 @@ export class GameApp {
       return;
     }
 
-    let n = clampVertexCount(payload.vertexCount);
-    n = Math.min(VERTEX_COUNT_A0_CAP, n);
+    const n = clampVertexCount(payload.vertexCount);
     if (n !== payload.vertexCount) {
-      this.flashStatus(`顶点数已限制为 ${n}（A0 上限 ${VERTEX_COUNT_A0_CAP}）`);
+      this.flashStatus(`顶点数已限制为 ${n}（上限 ${VERTEX_COUNT_HARD_CAP}）`);
     }
 
     this.vertexCountInput.value = String(n);
@@ -174,11 +187,33 @@ export class GameApp {
   }
 
   /**
+   * 拖点或相机变化时：增量更新交叉并刷新状态。
+   */
+  private onGraphOrCameraChanged(): void {
+    if (this.activeVertexId !== null) {
+      this.crossings.updateAfterVertexMove(this.deal, this.activeVertexId);
+      this.solved = this.crossings.isSolved();
+      this.updateStatus();
+    }
+    this.markDirty();
+  }
+
+  /**
+   * 拖点结束时再对齐一次通关态。
+   */
+  private refreshSolvedFromTracker(): void {
+    this.solved = this.crossings.isSolved();
+    this.updateStatus();
+    this.markDirty();
+  }
+
+  /**
    * 应用新局并重置通关/视图/种子展示。
    */
   private applyDeal(deal: Deal): void {
     this.deal = deal;
-    this.solved = false;
+    this.crossings.rebuild(deal);
+    this.solved = this.crossings.isSolved();
     this.activeVertexId = null;
     this.syncSeedField();
     this.resetView();
@@ -250,21 +285,10 @@ export class GameApp {
       renderDeal(this.ctx, this.deal, this.camera, {
         activeVertexId: this.activeVertexId,
         solved: this.solved,
+        hotEdges: this.crossings.getHotEdges(),
       });
     }
     requestAnimationFrame(() => this.frame());
-  }
-
-  /**
-   * 通关检测并更新状态文案。
-   */
-  private checkSolved(): void {
-    const nowSolved = isSolved(this.deal);
-    if (nowSolved !== this.solved) {
-      this.solved = nowSolved;
-    }
-    this.updateStatus();
-    this.markDirty();
   }
 
   /**
@@ -279,7 +303,6 @@ export class GameApp {
       this.statusEl.textContent = '已解开！可点「随机一局」继续';
       return;
     }
-    const crossings = findCrossings(this.deal).length;
-    this.statusEl.textContent = `顶点 ${this.deal.vertices.length} · 边 ${this.deal.edges.length} · 交叉 ${crossings}`;
+    this.statusEl.textContent = `顶点 ${this.deal.vertices.length} · 边 ${this.deal.edges.length} · 交叉 ${this.crossings.getCrossingCount()}`;
   }
 }

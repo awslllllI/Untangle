@@ -39,8 +39,8 @@ export type CrossingPair = {
 /** 顶点数硬顶（产品约定）。 */
 export const VERTEX_COUNT_HARD_CAP = 200;
 
-/** A0 阶段建议上限（性能与手感未冲到 200 前）。 */
-export const VERTEX_COUNT_A0_CAP = 15;
+/** 超过该顶点数时提示可能较卡（非硬限制）。 */
+export const VERTEX_COUNT_PERF_HINT = 40;
 
 /** 允许的最小顶点数（至少构成可玩平面图）。 */
 export const VERTEX_COUNT_MIN = 4;

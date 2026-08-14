@@ -99,3 +99,34 @@ export function segmentsIntersectProper(
 function nearlyEqualPoint(a: Vec2, b: Vec2, eps = 1e-9): boolean {
   return Math.abs(a.x - b.x) <= eps && Math.abs(a.y - b.y) <= eps;
 }
+
+/**
+ * 判断两轴对齐包围盒是否相交（含边界）。
+ */
+export function aabbOverlap(
+  aMinX: number,
+  aMinY: number,
+  aMaxX: number,
+  aMaxY: number,
+  bMinX: number,
+  bMinY: number,
+  bMaxX: number,
+  bMaxY: number,
+): boolean {
+  return aMinX <= bMaxX && aMaxX >= bMinX && aMinY <= bMaxY && aMaxY >= bMinY;
+}
+
+/**
+ * 线段端点的轴对齐包围盒。
+ */
+export function segmentAabb(
+  a: Vec2,
+  b: Vec2,
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  return {
+    minX: Math.min(a.x, b.x),
+    minY: Math.min(a.y, b.y),
+    maxX: Math.max(a.x, b.x),
+    maxY: Math.max(a.y, b.y),
+  };
+}
