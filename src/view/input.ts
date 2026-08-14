@@ -1,0 +1,217 @@
+import { distance } from '../core/geometry';
+import type { Deal, Vec2 } from '../core/types';
+import type { Camera } from './camera';
+
+export type InputCallbacks = {
+  /** 请求重绘。 */
+  onChange: () => void;
+  /** 顶点被拖动后（用于通关检测）。 */
+  onDragEnd: () => void;
+  /** 当前拖拽中的顶点，或 null。 */
+  onActiveVertex: (vertexId: number | null) => void;
+};
+
+type PointerMode =
+  | { kind: 'none' }
+  | { kind: 'drag-vertex'; pointerId: number; vertexId: number }
+  | { kind: 'pan'; pointerId: number; lastScreen: Vec2 }
+  | {
+      kind: 'pinch';
+      pointers: Map<number, Vec2>;
+      lastDistance: number;
+      lastMidpoint: Vec2;
+    };
+
+/**
+ * 绑定画布指针与滚轮：拖点 / 平移 / 双指缩放 / 滚轮缩放。
+ */
+export function attachInput(
+  canvas: HTMLCanvasElement,
+  camera: Camera,
+  getDeal: () => Deal,
+  callbacks: InputCallbacks,
+): () => void {
+  let mode: PointerMode = { kind: 'none' };
+  const activePointers = new Map<number, Vec2>();
+
+  /**
+   * 将 PointerEvent 转为 canvas 像素坐标。
+   */
+  function eventToScreen(event: PointerEvent): Vec2 {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    };
+  }
+
+  /**
+   * 在屏幕空间命中最近顶点；过远则返回 null。
+   */
+  function hitTestVertex(screen: Vec2, deal: Deal): number | null {
+    const hitRadius = 22;
+    let bestId: number | null = null;
+    let bestDist = hitRadius;
+    for (const v of deal.vertices) {
+      const p = camera.worldToScreen(v.position);
+      const d = distance(screen, p);
+      if (d <= bestDist) {
+        bestDist = d;
+        bestId = v.id;
+      }
+    }
+    return bestId;
+  }
+
+  /**
+   * 进入或更新双指捏合状态。
+   */
+  function beginOrUpdatePinch(): void {
+    if (activePointers.size !== 2) {
+      return;
+    }
+    const points = [...activePointers.values()];
+    const lastDistance = distance(points[0], points[1]);
+    const lastMidpoint = {
+      x: (points[0].x + points[1].x) / 2,
+      y: (points[0].y + points[1].y) / 2,
+    };
+    mode = {
+      kind: 'pinch',
+      pointers: new Map(activePointers),
+      lastDistance: Math.max(1, lastDistance),
+      lastMidpoint,
+    };
+  }
+
+  /**
+   * pointerdown：优先第二指进捏合，否则拖点或平移。
+   */
+  function onPointerDown(event: PointerEvent): void {
+    canvas.setPointerCapture(event.pointerId);
+    const screen = eventToScreen(event);
+    activePointers.set(event.pointerId, screen);
+
+    if (activePointers.size >= 2) {
+      beginOrUpdatePinch();
+      callbacks.onActiveVertex(null);
+      callbacks.onChange();
+      return;
+    }
+
+    const deal = getDeal();
+    const vertexId = hitTestVertex(screen, deal);
+    if (vertexId !== null) {
+      mode = { kind: 'drag-vertex', pointerId: event.pointerId, vertexId };
+      callbacks.onActiveVertex(vertexId);
+    } else {
+      mode = { kind: 'pan', pointerId: event.pointerId, lastScreen: screen };
+      callbacks.onActiveVertex(null);
+    }
+    callbacks.onChange();
+  }
+
+  /**
+   * pointermove：拖点、平移或捏合缩放。
+   */
+  function onPointerMove(event: PointerEvent): void {
+    if (!activePointers.has(event.pointerId)) {
+      return;
+    }
+    const screen = eventToScreen(event);
+    activePointers.set(event.pointerId, screen);
+
+    if (mode.kind === 'pinch' || activePointers.size >= 2) {
+      if (activePointers.size === 2) {
+        const points = [...activePointers.values()];
+        const dist = Math.max(1, distance(points[0], points[1]));
+        const mid = {
+          x: (points[0].x + points[1].x) / 2,
+          y: (points[0].y + points[1].y) / 2,
+        };
+        if (mode.kind !== 'pinch') {
+          beginOrUpdatePinch();
+        } else {
+          const factor = dist / mode.lastDistance;
+          camera.zoomAt(mid, factor);
+          camera.panByScreenDelta(mid.x - mode.lastMidpoint.x, mid.y - mode.lastMidpoint.y);
+          mode.lastDistance = dist;
+          mode.lastMidpoint = mid;
+        }
+        callbacks.onChange();
+      }
+      return;
+    }
+
+    if (mode.kind === 'drag-vertex' && mode.pointerId === event.pointerId) {
+      const deal = getDeal();
+      const world = camera.screenToWorld(screen);
+      deal.vertices[mode.vertexId].position = world;
+      callbacks.onChange();
+      return;
+    }
+
+    if (mode.kind === 'pan' && mode.pointerId === event.pointerId) {
+      const dx = screen.x - mode.lastScreen.x;
+      const dy = screen.y - mode.lastScreen.y;
+      camera.panByScreenDelta(dx, dy);
+      mode.lastScreen = screen;
+      callbacks.onChange();
+    }
+  }
+
+  /**
+   * pointerup / cancel：结束对应手势。
+   */
+  function onPointerUp(event: PointerEvent): void {
+    const wasDragging =
+      mode.kind === 'drag-vertex' && mode.pointerId === event.pointerId;
+    activePointers.delete(event.pointerId);
+
+    if (activePointers.size === 0) {
+      mode = { kind: 'none' };
+      callbacks.onActiveVertex(null);
+    } else if (activePointers.size === 1) {
+      const [pointerId, lastScreen] = [...activePointers.entries()][0];
+      mode = { kind: 'pan', pointerId, lastScreen };
+      callbacks.onActiveVertex(null);
+    } else {
+      beginOrUpdatePinch();
+      callbacks.onActiveVertex(null);
+    }
+
+    if (wasDragging) {
+      callbacks.onDragEnd();
+    }
+    callbacks.onChange();
+  }
+
+  /**
+   * 滚轮缩放（桌面）。
+   */
+  function onWheel(event: WheelEvent): void {
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const screen = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    const factor = event.deltaY < 0 ? 1.08 : 1 / 1.08;
+    camera.zoomAt(screen, factor);
+    callbacks.onChange();
+  }
+
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerUp);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+
+  /**
+   * 解除所有监听。
+   */
+  return () => {
+    canvas.removeEventListener('pointerdown', onPointerDown);
+    canvas.removeEventListener('pointermove', onPointerMove);
+    canvas.removeEventListener('pointerup', onPointerUp);
+    canvas.removeEventListener('pointercancel', onPointerUp);
+    canvas.removeEventListener('wheel', onWheel);
+  };
+}

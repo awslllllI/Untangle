@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>解缠 Untangle</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar" id="toolbar">
+        <label class="field">
+          顶点数
+          <input id="vertex-count" type="number" min="4" max="15" value="8" />
+        </label>
+        <button type="button" id="reroll">随机一局</button>
+        <button type="button" id="reset-view">重置视图</button>
+        <span class="status" id="status" aria-live="polite"></span>
+      </header>
+      <canvas id="game" tabindex="0" aria-label="解缠画布"></canvas>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

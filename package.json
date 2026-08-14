@@ -1,0 +1,20 @@
+{
+  "name": "untangle",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "node": "node scripts/with-node24.mjs node",
+    "dev": "node scripts/with-node24.mjs node ./node_modules/vite/bin/vite.js",
+    "build": "node scripts/with-node24.mjs node ./node_modules/typescript/bin/tsc && node scripts/with-node24.mjs node ./node_modules/vite/bin/vite.js build",
+    "preview": "node scripts/with-node24.mjs node ./node_modules/vite/bin/vite.js preview",
+    "which-node": "node scripts/with-node24.mjs node -p process.version"
+  },
+  "devDependencies": {
+    "typescript": "~5.7.2",
+    "vite": "^5.4.11"
+  }
+}

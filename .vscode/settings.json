@@ -1,0 +1,6 @@
+{
+  "terminal.integrated.env.windows": {
+    "PATH": "D:\\software\\nodejs;${env:PATH}",
+    "UNTANGLE_NODE_HOME": "D:\\software\\nodejs"
+  }
+}
