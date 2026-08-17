@@ -2,7 +2,9 @@ import {
   aabbOverlap,
   segmentAabb,
   segmentsIntersectProper,
+  segmentsIntersectProperFast,
 } from './geometry';
+import { EdgeSpatialIndex } from './spatialIndex';
 import type { CrossingPair, Deal, Edge, Vec2 } from './types';
 
 /**
@@ -101,7 +103,7 @@ export function boundsOfVertices(positions: readonly Vec2[]): {
 }
 
 /**
- * 可增量维护的交叉状态：拖点时只重算与该点关联的边。
+ * 可增量维护的交叉状态：拖点时用空间索引缩小候选集。
  */
 export class CrossingTracker {
   /** 每条边当前与之交叉的边集合。 */
@@ -109,6 +111,10 @@ export class CrossingTracker {
   private readonly hotEdges = new Set<number>();
   private incidentCache: number[][] = [];
   private pairCount = 0;
+  private readonly spatial = new EdgeSpatialIndex();
+  private readonly queryBuf: number[] = [];
+  private seenBuf = new Uint8Array(0);
+  private skipIncident = new Uint8Array(0);
 
   /**
    * 对新一局做全量重建。
@@ -121,6 +127,9 @@ export class CrossingTracker {
     this.hotEdges.clear();
     this.pairCount = 0;
     this.incidentCache = buildIncidentEdgeLists(deal);
+    this.spatial.rebuild(deal);
+    this.seenBuf = new Uint8Array(deal.edges.length);
+    this.skipIncident = new Uint8Array(deal.edges.length);
 
     const crossings = findCrossings(deal);
     for (const c of crossings) {
@@ -129,7 +138,7 @@ export class CrossingTracker {
   }
 
   /**
-   * 顶点拖动后：仅更新与该顶点关联边的交叉。
+   * 顶点拖动后：仅更新与该顶点关联边的交叉（空间网格加速）。
    */
   public updateAfterVertexMove(deal: Deal, vertexId: number): void {
     if (
@@ -147,7 +156,9 @@ export class CrossingTracker {
       return;
     }
 
+    this.skipIncident.fill(0);
     for (const edgeIndex of incident) {
+      this.skipIncident[edgeIndex] = 1;
       this.clearPairsForEdge(edgeIndex);
     }
 
@@ -156,10 +167,15 @@ export class CrossingTracker {
       const e1 = edges[i];
       const p1 = vertices[e1.a].position;
       const q1 = vertices[e1.b].position;
-      const box1 = segmentAabb(p1, q1);
+      const minX = p1.x < q1.x ? p1.x : q1.x;
+      const minY = p1.y < q1.y ? p1.y : q1.y;
+      const maxX = p1.x > q1.x ? p1.x : q1.x;
+      const maxY = p1.y > q1.y ? p1.y : q1.y;
 
-      for (let j = 0; j < edges.length; j += 1) {
-        if (j === i) {
+      this.spatial.queryAabb(minX, minY, maxX, maxY, this.queryBuf, this.seenBuf);
+
+      for (const j of this.queryBuf) {
+        if (j === i || this.skipIncident[j]) {
           continue;
         }
         const e2 = edges[j];
@@ -168,25 +184,33 @@ export class CrossingTracker {
         }
         const p2 = vertices[e2.a].position;
         const q2 = vertices[e2.b].position;
-        const box2 = segmentAabb(p2, q2);
         if (
-          !aabbOverlap(
-            box1.minX,
-            box1.minY,
-            box1.maxX,
-            box1.maxY,
-            box2.minX,
-            box2.minY,
-            box2.maxX,
-            box2.maxY,
+          !segmentsIntersectProperFast(
+            p1.x,
+            p1.y,
+            q1.x,
+            q1.y,
+            p2.x,
+            p2.y,
+            q2.x,
+            q2.y,
           )
         ) {
           continue;
         }
-        if (segmentsIntersectProper(p1, q1, p2, q2)) {
-          this.addPair(i, j);
-        }
+        this.addPair(i, j);
       }
+    }
+  }
+
+  /**
+   * 拖点结束后刷新空间索引（边已挪到新位置）。
+   */
+  public refreshSpatialIndex(deal: Deal): void {
+    this.spatial.rebuild(deal);
+    if (this.seenBuf.length !== deal.edges.length) {
+      this.seenBuf = new Uint8Array(deal.edges.length);
+      this.skipIncident = new Uint8Array(deal.edges.length);
     }
   }
 

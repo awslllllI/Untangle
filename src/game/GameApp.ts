@@ -9,7 +9,8 @@ import {
 } from '../core/types';
 import { Camera } from '../view/camera';
 import { attachInput } from '../view/input';
-import { renderDeal, resetCameraToDeal } from '../view/renderer';
+import { GraphPaintCache } from '../view/renderCache';
+import { resetCameraToDeal } from '../view/renderer';
 
 /**
  * 组装可玩循环：生成、种子复现、大图性能、交互、通关、工具栏。
@@ -19,6 +20,7 @@ export class GameApp {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly camera = new Camera();
   private readonly crossings = new CrossingTracker();
+  private readonly paintCache = new GraphPaintCache();
   private readonly statusEl: HTMLElement;
   private readonly vertexCountInput: HTMLInputElement;
   private readonly seedInput: HTMLInputElement;
@@ -27,8 +29,10 @@ export class GameApp {
   private solved = false;
   private activeVertexId: number | null = null;
   private needsDraw = true;
+  private crossingsPending = false;
   private running = false;
   private statusFlash: string | null = null;
+  private cacheRefreshTimer: number | null = null;
 
   /**
    * 从页面根节点绑定画布与工具栏控件。
@@ -111,12 +115,29 @@ export class GameApp {
     this.resetView();
     attachInput(this.canvas, this.camera, () => this.deal, {
       onChange: () => {
-        this.onGraphOrCameraChanged();
+        if (this.activeVertexId !== null) {
+          this.crossingsPending = true;
+        } else {
+          // 平移/缩放：延后按新缩放重烘焙，手势中只 blit
+          this.scheduleCacheRefresh();
+        }
+        this.markDirty();
       },
       onDragEnd: () => {
-        this.refreshSolvedFromTracker();
+        if (this.activeVertexId !== null) {
+          this.crossings.updateAfterVertexMove(this.deal, this.activeVertexId);
+          this.crossingsPending = false;
+        }
+        this.crossings.refreshSpatialIndex(this.deal);
+        this.paintCache.endDrag();
+        this.solved = this.crossings.isSolved();
+        this.updateStatus();
+        this.markDirty();
       },
       onActiveVertex: (vertexId: number | null) => {
+        if (vertexId !== null) {
+          this.paintCache.beginDrag(vertexId);
+        }
         this.activeVertexId = vertexId;
         this.markDirty();
       },
@@ -183,27 +204,7 @@ export class GameApp {
    */
   public resetView(): void {
     resetCameraToDeal(this.camera, this.deal);
-    this.markDirty();
-  }
-
-  /**
-   * 拖点或相机变化时：增量更新交叉并刷新状态。
-   */
-  private onGraphOrCameraChanged(): void {
-    if (this.activeVertexId !== null) {
-      this.crossings.updateAfterVertexMove(this.deal, this.activeVertexId);
-      this.solved = this.crossings.isSolved();
-      this.updateStatus();
-    }
-    this.markDirty();
-  }
-
-  /**
-   * 拖点结束时再对齐一次通关态。
-   */
-  private refreshSolvedFromTracker(): void {
-    this.solved = this.crossings.isSolved();
-    this.updateStatus();
+    this.paintCache.invalidate();
     this.markDirty();
   }
 
@@ -213,12 +214,29 @@ export class GameApp {
   private applyDeal(deal: Deal): void {
     this.deal = deal;
     this.crossings.rebuild(deal);
+    this.crossingsPending = false;
+    this.paintCache.endDrag();
+    this.paintCache.invalidate();
     this.solved = this.crossings.isSolved();
     this.activeVertexId = null;
     this.syncSeedField();
     this.resetView();
     this.updateStatus();
     this.markDirty();
+  }
+
+  /**
+   * 平移/缩放停止后再按新倍率重烘焙，手势过程只用位图拉伸。
+   */
+  private scheduleCacheRefresh(): void {
+    if (this.cacheRefreshTimer !== null) {
+      window.clearTimeout(this.cacheRefreshTimer);
+    }
+    this.cacheRefreshTimer = window.setTimeout(() => {
+      this.cacheRefreshTimer = null;
+      this.paintCache.invalidate();
+      this.markDirty();
+    }, 120);
   }
 
   /**
@@ -263,6 +281,7 @@ export class GameApp {
     }
 
     this.camera.setViewport(width, height, dpr);
+    this.paintCache.invalidate();
     this.markDirty();
   }
 
@@ -280,9 +299,17 @@ export class GameApp {
     if (!this.running) {
       return;
     }
+
+    if (this.crossingsPending && this.activeVertexId !== null) {
+      this.crossingsPending = false;
+      this.crossings.updateAfterVertexMove(this.deal, this.activeVertexId);
+      this.solved = this.crossings.isSolved();
+      this.updateStatus();
+    }
+
     if (this.needsDraw) {
       this.needsDraw = false;
-      renderDeal(this.ctx, this.deal, this.camera, {
+      this.paintCache.paint(this.ctx, this.deal, this.camera, {
         activeVertexId: this.activeVertexId,
         solved: this.solved,
         hotEdges: this.crossings.getHotEdges(),

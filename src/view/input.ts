@@ -170,7 +170,14 @@ export function attachInput(
   function onPointerUp(event: PointerEvent): void {
     const wasDragging =
       mode.kind === 'drag-vertex' && mode.pointerId === event.pointerId;
+    const draggedVertexId =
+      wasDragging && mode.kind === 'drag-vertex' ? mode.vertexId : null;
     activePointers.delete(event.pointerId);
+
+    // 先收尾拖点（此时 active 仍有效），再清高亮
+    if (wasDragging && draggedVertexId !== null) {
+      callbacks.onDragEnd();
+    }
 
     if (activePointers.size === 0) {
       mode = { kind: 'none' };
@@ -184,9 +191,6 @@ export function attachInput(
       callbacks.onActiveVertex(null);
     }
 
-    if (wasDragging) {
-      callbacks.onDragEnd();
-    }
     callbacks.onChange();
   }
 

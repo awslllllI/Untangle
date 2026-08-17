@@ -101,6 +101,45 @@ function nearlyEqualPoint(a: Vec2, b: Vec2, eps = 1e-9): boolean {
 }
 
 /**
+ * 快速判交：只做严格跨立，忽略共线重叠（拖点热路径用）。
+ */
+export function segmentsIntersectProperFast(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number,
+): boolean {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const acx = cx - ax;
+  const acy = cy - ay;
+  const adx = dx - ax;
+  const ady = dy - ay;
+  const c1 = abx * acy - aby * acx;
+  const c2 = abx * ady - aby * adx;
+  if (c1 === 0 || c2 === 0 || c1 > 0 === c2 > 0) {
+    return false;
+  }
+  const cdx = dx - cx;
+  const cdy = dy - cy;
+  const cax = ax - cx;
+  const cay = ay - cy;
+  const cbx = bx - cx;
+  const cby = by - cy;
+  const c3 = cdx * cay - cdy * cax;
+  const c4 = cdx * cby - cdy * cbx;
+  if (c3 === 0 || c4 === 0 || c3 > 0 === c4 > 0) {
+    return false;
+  }
+  return true;
+}
+
+
+/**
  * 判断两轴对齐包围盒是否相交（含边界）。
  */
 export function aabbOverlap(
