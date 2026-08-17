@@ -13,7 +13,7 @@ import { resetCameraToDeal } from '../view/renderer';
 import { SvgGraphView } from '../view/svgGraph';
 
 /**
- * 组装可玩循环：生成、种子、SVG、手机手势、可收起工具栏。
+ * 组装可玩循环：生成、种子、SVG、手机手势、齿轮菜单。
  */
 export class GameApp {
   private readonly root: HTMLElement;
@@ -24,7 +24,11 @@ export class GameApp {
   private readonly statusEl: HTMLElement;
   private readonly vertexCountInput: HTMLInputElement;
   private readonly seedInput: HTMLInputElement;
-  private readonly toolbarExpandBtn: HTMLButtonElement;
+  private readonly menuOverlay: HTMLElement;
+  private readonly menuHintEl: HTMLElement;
+  private readonly rerollBtn: HTMLButtonElement;
+  private readonly resetViewBtn: HTMLButtonElement;
+  private readonly loadSeedBtn: HTMLButtonElement;
 
   private deal: Deal;
   private solved = false;
@@ -34,9 +38,13 @@ export class GameApp {
   private geometryPending = false;
   private running = false;
   private statusFlash: string | null = null;
+  private menuOpen = false;
+  private pendingReroll = false;
+  private pendingLoadSeed = false;
+  private pendingResetView = false;
 
   /**
-   * 从页面根节点绑定 SVG 与工具栏控件。
+   * 从页面根节点绑定 SVG 与菜单控件。
    */
   public constructor(root: HTMLElement) {
     const surface = root.querySelector<SVGSVGElement>('#game');
@@ -47,8 +55,11 @@ export class GameApp {
     const resetViewBtn = root.querySelector<HTMLButtonElement>('#reset-view');
     const copySeedBtn = root.querySelector<HTMLButtonElement>('#copy-seed');
     const loadSeedBtn = root.querySelector<HTMLButtonElement>('#load-seed');
-    const toolbarExpandBtn = root.querySelector<HTMLButtonElement>('#toolbar-expand');
-    const toolbarCollapseBtn = root.querySelector<HTMLButtonElement>('#toolbar-collapse');
+    const menuOverlay = root.querySelector<HTMLElement>('#menu-overlay');
+    const menuOpenBtn = root.querySelector<HTMLButtonElement>('#menu-open');
+    const menuDismissBtn = root.querySelector<HTMLButtonElement>('#menu-dismiss');
+    const menuHintEl = root.querySelector<HTMLElement>('#menu-hint');
+    const menuPanel = root.querySelector<HTMLElement>('#menu-panel');
 
     if (
       !surface ||
@@ -59,10 +70,13 @@ export class GameApp {
       !resetViewBtn ||
       !copySeedBtn ||
       !loadSeedBtn ||
-      !toolbarExpandBtn ||
-      !toolbarCollapseBtn
+      !menuOverlay ||
+      !menuOpenBtn ||
+      !menuDismissBtn ||
+      !menuHintEl ||
+      !menuPanel
     ) {
-      throw new Error('页面缺少必要的 #game / 工具栏节点');
+      throw new Error('页面缺少必要的 #game / 菜单节点');
     }
 
     this.root = root;
@@ -71,7 +85,11 @@ export class GameApp {
     this.statusEl = statusEl;
     this.vertexCountInput = vertexCountInput;
     this.seedInput = seedInput;
-    this.toolbarExpandBtn = toolbarExpandBtn;
+    this.menuOverlay = menuOverlay;
+    this.menuHintEl = menuHintEl;
+    this.rerollBtn = rerollBtn;
+    this.resetViewBtn = resetViewBtn;
+    this.loadSeedBtn = loadSeedBtn;
 
     vertexCountInput.min = String(VERTEX_COUNT_MIN);
     vertexCountInput.max = String(VERTEX_COUNT_HARD_CAP);
@@ -85,21 +103,25 @@ export class GameApp {
     this.solved = this.crossings.isSolved();
     this.syncSeedField();
 
-    rerollBtn.addEventListener('click', () => this.reroll());
-    resetViewBtn.addEventListener('click', () => this.resetView());
-    vertexCountInput.addEventListener('change', () => this.reroll());
+    menuOpenBtn.addEventListener('click', () => this.openMenu());
+    menuDismissBtn.addEventListener('click', () => this.closeMenu());
+    menuOverlay.addEventListener('click', () => this.closeMenu());
+    menuPanel.addEventListener('click', (event) => event.stopPropagation());
+
+    rerollBtn.addEventListener('click', () => this.queueMenuAction('reroll'));
+    resetViewBtn.addEventListener('click', () => this.queueMenuAction('reset-view'));
+    loadSeedBtn.addEventListener('click', () => this.queueMenuAction('load-seed'));
     copySeedBtn.addEventListener('click', () => {
       void this.copySeed();
     });
-    loadSeedBtn.addEventListener('click', () => this.loadSeedFromInput());
+    vertexCountInput.addEventListener('input', () => this.refreshMenuHint());
+    seedInput.addEventListener('input', () => this.refreshMenuHint());
     seedInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault();
-        this.loadSeedFromInput();
+        this.queueMenuAction('load-seed');
       }
     });
-    toolbarCollapseBtn.addEventListener('click', () => this.setToolbarCollapsed(true));
-    toolbarExpandBtn.addEventListener('click', () => this.setToolbarCollapsed(false));
 
     window.addEventListener('resize', () => this.resize());
     window.visualViewport?.addEventListener('resize', () => this.resize());
@@ -142,26 +164,121 @@ export class GameApp {
         this.updateStatus();
         this.markDirty();
       },
-      getSelectedVertexId: () => this.activeVertexId,
-      setSelectedVertexId: (vertexId) => {
+      onActiveVertex: (vertexId) => {
         this.activeVertexId = vertexId;
         this.graph.setActiveVertex(this.deal, vertexId);
         this.markDirty();
       },
-      onGraphInteract: () => this.setToolbarCollapsed(true),
     });
     this.updateStatus();
     requestAnimationFrame(() => this.frame());
   }
 
   /**
-   * 收起或展开顶部工具栏。
+   * 打开菜单：填入当前局草稿，暂不改游戏状态。
    */
-  private setToolbarCollapsed(collapsed: boolean): void {
-    this.root.classList.toggle('toolbar-collapsed', collapsed);
-    this.toolbarExpandBtn.hidden = !collapsed;
-    // 工具栏显隐会改变画布高度
-    requestAnimationFrame(() => this.resize());
+  private openMenu(): void {
+    this.menuOpen = true;
+    this.pendingReroll = false;
+    this.pendingLoadSeed = false;
+    this.pendingResetView = false;
+    this.vertexCountInput.value = String(this.deal.vertices.length);
+    this.syncSeedField();
+    this.syncPendingButtons();
+    this.refreshMenuHint();
+    this.menuOverlay.hidden = false;
+    this.root.classList.add('menu-open');
+  }
+
+  /**
+   * 关闭菜单并应用草稿中的修改。
+   */
+  private closeMenu(): void {
+    if (!this.menuOpen) {
+      return;
+    }
+    this.menuOpen = false;
+    this.menuOverlay.hidden = true;
+    this.root.classList.remove('menu-open');
+    this.applyMenuChanges();
+    this.pendingReroll = false;
+    this.pendingLoadSeed = false;
+    this.pendingResetView = false;
+    this.syncPendingButtons();
+  }
+
+  /**
+   * 在菜单里标记待生效动作（随机与加载互斥；重置视图可并存）。
+   */
+  private queueMenuAction(action: 'reroll' | 'load-seed' | 'reset-view'): void {
+    if (action === 'reroll') {
+      this.pendingReroll = !this.pendingReroll;
+      if (this.pendingReroll) {
+        this.pendingLoadSeed = false;
+      }
+    } else if (action === 'load-seed') {
+      this.pendingLoadSeed = !this.pendingLoadSeed;
+      if (this.pendingLoadSeed) {
+        this.pendingReroll = false;
+      }
+    } else {
+      this.pendingResetView = !this.pendingResetView;
+    }
+    this.syncPendingButtons();
+    this.refreshMenuHint();
+  }
+
+  /**
+   * 同步待生效按钮高亮。
+   */
+  private syncPendingButtons(): void {
+    this.rerollBtn.classList.toggle('pending', this.pendingReroll);
+    this.loadSeedBtn.classList.toggle('pending', this.pendingLoadSeed);
+    this.resetViewBtn.classList.toggle('pending', this.pendingResetView);
+  }
+
+  /**
+   * 更新菜单提示文案。
+   */
+  private refreshMenuHint(): void {
+    const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
+    const countChanged = n !== this.deal.vertices.length;
+    const parts: string[] = [];
+    if (this.pendingLoadSeed) {
+      parts.push('将加载种子');
+    } else if (this.pendingReroll || countChanged) {
+      parts.push(countChanged ? `将生成 ${n} 点新局` : '将随机新局');
+    }
+    if (this.pendingResetView) {
+      parts.push('将重置视图');
+    }
+    this.menuHintEl.textContent =
+      parts.length > 0
+        ? `${parts.join('；')}（返回游戏后生效）`
+        : '修改将在返回游戏后生效';
+  }
+
+  /**
+   * 退出菜单时应用草稿：加载种子 / 随机 / 顶点数变更 / 重置视图。
+   */
+  private applyMenuChanges(): void {
+    const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
+    this.vertexCountInput.value = String(n);
+    const countChanged = n !== this.deal.vertices.length;
+    let dealChanged = false;
+
+    if (this.pendingLoadSeed) {
+      this.loadSeedFromInput();
+      dealChanged = true;
+    } else if (this.pendingReroll || countChanged) {
+      this.reroll();
+      dealChanged = true;
+    }
+
+    // 新局本身会重置视图；仅在未换局时单独执行重置
+    if (this.pendingResetView && !dealChanged) {
+      this.resetView();
+    }
   }
 
   /**
@@ -203,7 +320,7 @@ export class GameApp {
   }
 
   /**
-   * 复制当前种子到剪贴板。
+   * 复制当前种子到剪贴板（立即生效，不改局）。
    */
   public async copySeed(): Promise<void> {
     const text = encodeSeed(this.deal.vertices.length, this.deal.generationSeed);
@@ -317,7 +434,7 @@ export class GameApp {
   }
 
   /**
-   * 根据交叉数与通关态刷新工具栏状态。
+   * 根据交叉数与通关态刷新状态文案。
    */
   private updateStatus(): void {
     if (this.statusFlash) {
@@ -325,7 +442,7 @@ export class GameApp {
       return;
     }
     if (this.solved) {
-      this.statusEl.textContent = '已解开！可点「随机一局」继续';
+      this.statusEl.textContent = '已解开！可打开菜单继续';
       return;
     }
     this.statusEl.textContent = `顶点 ${this.deal.vertices.length} · 边 ${this.deal.edges.length} · 交叉 ${this.crossings.getCrossingCount()}`;

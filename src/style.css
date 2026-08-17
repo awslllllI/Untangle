@@ -27,53 +27,112 @@ body {
 
 #app {
   position: relative;
-  display: flex;
-  flex-direction: column;
   width: 100%;
   height: 100%;
 }
 
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 0.75rem;
-  padding: 0.6rem 0.75rem;
-  background: #151b24;
-  border-bottom: 1px solid #243041;
-  flex-shrink: 0;
-  touch-action: manipulation;
-  transition: transform 0.2s ease, opacity 0.2s ease;
-}
-
-#app.toolbar-collapsed .toolbar {
-  display: none;
-}
-
-.toolbar-collapse {
-  margin-left: 0.25rem;
-}
-
-.toolbar-expand {
+#game {
   position: absolute;
-  top: 0.5rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 5;
-  border: 1px solid #3b4a5f;
-  background: rgba(28, 38, 51, 0.94);
-  color: inherit;
-  border-radius: 999px;
-  padding: 0.35rem 0.9rem;
-  font: inherit;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+  outline: none;
+  background: #0f1419;
+  overflow: hidden;
+}
+
+.hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  pointer-events: none;
+}
+
+.status {
   font-size: 0.85rem;
+  color: #9db0c9;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  max-width: calc(100% - 3.5rem);
+  pointer-events: none;
+}
+
+.menu-gear {
+  pointer-events: auto;
+  flex-shrink: 0;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #3b4a5f;
+  background: rgba(28, 38, 51, 0.92);
+  color: #d7e2f0;
+  border-radius: 50%;
   cursor: pointer;
   touch-action: manipulation;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
-.toolbar-expand[hidden] {
+.menu-gear:active {
+  background: #243041;
+}
+
+.menu-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 12, 18, 0.55);
+  touch-action: manipulation;
+}
+
+.menu-overlay[hidden] {
   display: none !important;
+}
+
+.menu-dismiss {
+  flex: 0 0 auto;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #243041;
+  background: rgba(15, 20, 28, 0.92);
+  color: #9db0c9;
+  padding: 0.85rem 1rem;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-align: center;
+}
+
+.menu-dismiss:active {
+  background: rgba(28, 38, 51, 0.95);
+  color: #e8eef7;
+}
+
+.menu-panel {
+  flex: 0 0 auto;
+  overflow: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.85rem 0.9rem 1.25rem;
+  background: #151b24;
+  border-bottom: 1px solid #243041;
+  max-height: min(70%, 28rem);
 }
 
 .field {
@@ -113,20 +172,19 @@ button:active {
   background: #243041;
 }
 
-.status {
-  margin-left: auto;
-  font-size: 0.85rem;
-  color: #9db0c9;
+button.pending {
+  border-color: #6ea8ff;
+  background: #243a55;
+  color: #e8f0ff;
 }
 
-#game {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  display: block;
-  touch-action: none;
-  cursor: crosshair;
-  outline: none;
-  background: #0f1419;
-  overflow: hidden;
+.menu-hint {
+  flex-basis: 100%;
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: #8fa3bb;
+}
+
+#app.menu-open .menu-gear {
+  visibility: hidden;
 }

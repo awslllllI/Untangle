@@ -11,32 +11,39 @@
   </head>
   <body>
     <div id="app">
-      <header class="toolbar" id="toolbar">
-        <label class="field">
-          顶点数
-          <input id="vertex-count" type="number" min="4" max="200" value="8" />
-        </label>
-        <button type="button" id="reroll">随机一局</button>
-        <button type="button" id="reset-view">重置视图</button>
-        <label class="field seed-field">
-          种子
-          <input id="seed-input" type="text" spellcheck="false" autocomplete="off" />
-        </label>
-        <button type="button" id="copy-seed">复制</button>
-        <button type="button" id="load-seed">加载</button>
-        <button type="button" id="toolbar-collapse" class="toolbar-collapse" title="收起">收起</button>
-        <span class="status" id="status" aria-live="polite"></span>
-      </header>
-      <button
-        type="button"
-        id="toolbar-expand"
-        class="toolbar-expand"
-        aria-label="展开工具栏"
-        hidden
-      >
-        菜单
-      </button>
       <svg id="game" tabindex="0" aria-label="解缠画布"></svg>
+      <div class="hud">
+        <span class="status" id="status" aria-live="polite"></span>
+        <button type="button" id="menu-open" class="menu-gear" aria-label="打开菜单" title="菜单">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.07 7.07 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.58.23-1.12.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.58a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.43.34.68.22l2.39-.96c.5.4 1.05.71 1.63.94l.36 2.54c.05.24.25.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.58-.23 1.12-.54 1.63-.94l2.39.96c.25.12.54.02.68-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <div id="menu-overlay" class="menu-overlay" hidden>
+        <button type="button" id="menu-dismiss" class="menu-dismiss">
+          点击空白处返回游戏
+        </button>
+        <div class="menu-panel" role="dialog" aria-label="游戏菜单" id="menu-panel">
+          <label class="field">
+            顶点数
+            <input id="vertex-count" type="number" min="4" max="200" value="8" />
+          </label>
+          <button type="button" id="reroll">随机一局</button>
+          <button type="button" id="reset-view">重置视图</button>
+          <label class="field seed-field">
+            种子
+            <input id="seed-input" type="text" spellcheck="false" autocomplete="off" />
+          </label>
+          <button type="button" id="copy-seed">复制</button>
+          <button type="button" id="load-seed">加载</button>
+          <p class="menu-hint" id="menu-hint">修改将在返回游戏后生效</p>
+        </div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
