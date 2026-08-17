@@ -32,7 +32,6 @@ export class GameApp {
   private readonly seedInput: HTMLInputElement;
   private readonly menuOverlay: HTMLElement;
   private readonly menuHintEl: HTMLElement;
-  private readonly resetViewBtn: HTMLButtonElement;
   private readonly loadSeedBtn: HTMLButtonElement;
   private readonly restartBtn: HTMLButtonElement;
   private readonly restartVeil: HTMLElement;
@@ -49,7 +48,6 @@ export class GameApp {
   private statusFlash: string | null = null;
   private menuOpen = false;
   private pendingLoadSeed = false;
-  private pendingResetView = false;
   private restartHolding = false;
   private restartProgress = 0;
   private restartRaf = 0;
@@ -68,7 +66,6 @@ export class GameApp {
     const vertexCountInput = root.querySelector<HTMLInputElement>('#vertex-count');
     const seedInput = root.querySelector<HTMLInputElement>('#seed-input');
     const rerollBtn = root.querySelector<HTMLButtonElement>('#reroll');
-    const resetViewBtn = root.querySelector<HTMLButtonElement>('#reset-view');
     const copySeedBtn = root.querySelector<HTMLButtonElement>('#copy-seed');
     const loadSeedBtn = root.querySelector<HTMLButtonElement>('#load-seed');
     const menuOverlay = root.querySelector<HTMLElement>('#menu-overlay');
@@ -87,7 +84,6 @@ export class GameApp {
       !vertexCountInput ||
       !seedInput ||
       !rerollBtn ||
-      !resetViewBtn ||
       !copySeedBtn ||
       !loadSeedBtn ||
       !menuOverlay ||
@@ -111,7 +107,6 @@ export class GameApp {
     this.seedInput = seedInput;
     this.menuOverlay = menuOverlay;
     this.menuHintEl = menuHintEl;
-    this.resetViewBtn = resetViewBtn;
     this.loadSeedBtn = loadSeedBtn;
     this.restartBtn = restartBtn;
     this.restartVeil = restartVeil;
@@ -134,8 +129,7 @@ export class GameApp {
     menuPanel.addEventListener('click', (event) => event.stopPropagation());
 
     rerollBtn.addEventListener('click', () => this.rerollAndReturn());
-    resetViewBtn.addEventListener('click', () => this.queueMenuAction('reset-view'));
-    loadSeedBtn.addEventListener('click', () => this.queueMenuAction('load-seed'));
+    loadSeedBtn.addEventListener('click', () => this.queueLoadSeed());
     copySeedBtn.addEventListener('click', () => {
       void this.copySeed();
     });
@@ -148,7 +142,7 @@ export class GameApp {
     seedInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault();
-        this.queueMenuAction('load-seed');
+        this.queueLoadSeed();
       }
     });
 
@@ -414,7 +408,6 @@ export class GameApp {
     }
     this.menuOpen = true;
     this.pendingLoadSeed = false;
-    this.pendingResetView = false;
     this.vertexCountInput.value = String(this.deal.vertices.length);
     this.syncSeedField();
     this.syncPendingButtons();
@@ -435,7 +428,6 @@ export class GameApp {
     this.root.classList.remove('menu-open');
     this.applyMenuChanges();
     this.pendingLoadSeed = false;
-    this.pendingResetView = false;
     this.syncPendingButtons();
   }
 
@@ -444,7 +436,6 @@ export class GameApp {
    */
   private rerollAndReturn(): void {
     this.pendingLoadSeed = false;
-    this.pendingResetView = false;
     this.normalizeVertexCountInput();
     this.menuOpen = false;
     this.menuOverlay.hidden = true;
@@ -454,14 +445,10 @@ export class GameApp {
   }
 
   /**
-   * 在菜单里标记待生效动作。
+   * 在菜单里标记「加载种子」待生效。
    */
-  private queueMenuAction(action: 'load-seed' | 'reset-view'): void {
-    if (action === 'load-seed') {
-      this.pendingLoadSeed = !this.pendingLoadSeed;
-    } else {
-      this.pendingResetView = !this.pendingResetView;
-    }
+  private queueLoadSeed(): void {
+    this.pendingLoadSeed = !this.pendingLoadSeed;
     this.syncPendingButtons();
     this.refreshMenuHint();
   }
@@ -471,7 +458,6 @@ export class GameApp {
    */
   private syncPendingButtons(): void {
     this.loadSeedBtn.classList.toggle('pending', this.pendingLoadSeed);
-    this.resetViewBtn.classList.toggle('pending', this.pendingResetView);
   }
 
   /**
@@ -486,9 +472,6 @@ export class GameApp {
     } else if (countChanged) {
       parts.push(`将生成 ${n} 点新局`);
     }
-    if (this.pendingResetView) {
-      parts.push('将重置视图');
-    }
     this.menuHintEl.textContent =
       parts.length > 0
         ? `${parts.join('；')}（点空白处返回后生效）`
@@ -502,18 +485,11 @@ export class GameApp {
     const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
     this.vertexCountInput.value = String(n);
     const countChanged = n !== this.deal.vertices.length;
-    let dealChanged = false;
 
     if (this.pendingLoadSeed) {
       this.loadSeedFromInput();
-      dealChanged = true;
     } else if (countChanged) {
       this.reroll();
-      dealChanged = true;
-    }
-
-    if (this.pendingResetView && !dealChanged) {
-      this.resetView();
     }
   }
 
