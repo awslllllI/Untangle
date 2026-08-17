@@ -1,6 +1,7 @@
 import { distance } from '../core/geometry';
 import type { Deal, Vec2 } from '../core/types';
 import type { Camera } from './camera';
+import { VERTEX_RADIUS_WORLD } from './svgGraph';
 
 export type InputCallbacks = {
   /** 请求重绘。 */
@@ -26,7 +27,7 @@ type PointerMode =
  * 绑定画布指针与滚轮：拖点 / 平移 / 双指缩放 / 滚轮缩放。
  */
 export function attachInput(
-  canvas: HTMLCanvasElement,
+  surface: SVGSVGElement,
   camera: Camera,
   getDeal: () => Deal,
   callbacks: InputCallbacks,
@@ -35,10 +36,10 @@ export function attachInput(
   const activePointers = new Map<number, Vec2>();
 
   /**
-   * 将 PointerEvent 转为 canvas 像素坐标。
+   * 将 PointerEvent 转为表面像素坐标。
    */
   function eventToScreen(event: PointerEvent): Vec2 {
-    const rect = canvas.getBoundingClientRect();
+    const rect = surface.getBoundingClientRect();
     return {
       x: event.clientX - rect.left,
       y: event.clientY - rect.top,
@@ -46,11 +47,10 @@ export function attachInput(
   }
 
   /**
-   * 在屏幕空间命中最近顶点；过远则返回 null。
-   * 命中半径按屏幕像素固定，大图靠缩放点选（与相机设计一致）。
+   * 在屏幕空间命中最近顶点；半径与视觉圆一致（世界半径 × scale）。
    */
   function hitTestVertex(screen: Vec2, deal: Deal): number | null {
-    const hitRadius = Math.max(16, Math.min(28, 20 + 4 / Math.max(0.35, camera.scale)));
+    const hitRadius = VERTEX_RADIUS_WORLD * camera.scale + 8;
     const hitRadiusSq = hitRadius * hitRadius;
     let bestId: number | null = null;
     let bestDistSq = hitRadiusSq;
@@ -92,7 +92,7 @@ export function attachInput(
    * pointerdown：优先第二指进捏合，否则拖点或平移。
    */
   function onPointerDown(event: PointerEvent): void {
-    canvas.setPointerCapture(event.pointerId);
+    surface.setPointerCapture(event.pointerId);
     const screen = eventToScreen(event);
     activePointers.set(event.pointerId, screen);
 
@@ -199,27 +199,27 @@ export function attachInput(
    */
   function onWheel(event: WheelEvent): void {
     event.preventDefault();
-    const rect = canvas.getBoundingClientRect();
+    const rect = surface.getBoundingClientRect();
     const screen = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const factor = event.deltaY < 0 ? 1.08 : 1 / 1.08;
     camera.zoomAt(screen, factor);
     callbacks.onChange();
   }
 
-  canvas.addEventListener('pointerdown', onPointerDown);
-  canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerup', onPointerUp);
-  canvas.addEventListener('pointercancel', onPointerUp);
-  canvas.addEventListener('wheel', onWheel, { passive: false });
+  surface.addEventListener('pointerdown', onPointerDown);
+  surface.addEventListener('pointermove', onPointerMove);
+  surface.addEventListener('pointerup', onPointerUp);
+  surface.addEventListener('pointercancel', onPointerUp);
+  surface.addEventListener('wheel', onWheel, { passive: false });
 
   /**
    * 解除所有监听。
    */
   return () => {
-    canvas.removeEventListener('pointerdown', onPointerDown);
-    canvas.removeEventListener('pointermove', onPointerMove);
-    canvas.removeEventListener('pointerup', onPointerUp);
-    canvas.removeEventListener('pointercancel', onPointerUp);
-    canvas.removeEventListener('wheel', onWheel);
+    surface.removeEventListener('pointerdown', onPointerDown);
+    surface.removeEventListener('pointermove', onPointerMove);
+    surface.removeEventListener('pointerup', onPointerUp);
+    surface.removeEventListener('pointercancel', onPointerUp);
+    surface.removeEventListener('wheel', onWheel);
   };
 }

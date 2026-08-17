@@ -9,18 +9,17 @@ import {
 } from '../core/types';
 import { Camera } from '../view/camera';
 import { attachInput } from '../view/input';
-import { GraphPaintCache } from '../view/renderCache';
 import { resetCameraToDeal } from '../view/renderer';
+import { SvgGraphView } from '../view/svgGraph';
 
 /**
- * 组装可玩循环：生成、种子复现、大图性能、交互、通关、工具栏。
+ * 组装可玩循环：生成、种子复现、SVG 矢量渲染、交互、通关、工具栏。
  */
 export class GameApp {
-  private readonly canvas: HTMLCanvasElement;
-  private readonly ctx: CanvasRenderingContext2D;
+  private readonly surface: SVGSVGElement;
   private readonly camera = new Camera();
   private readonly crossings = new CrossingTracker();
-  private readonly paintCache = new GraphPaintCache();
+  private readonly graph: SvgGraphView;
   private readonly statusEl: HTMLElement;
   private readonly vertexCountInput: HTMLInputElement;
   private readonly seedInput: HTMLInputElement;
@@ -30,15 +29,15 @@ export class GameApp {
   private activeVertexId: number | null = null;
   private needsDraw = true;
   private crossingsPending = false;
+  private geometryPending = false;
   private running = false;
   private statusFlash: string | null = null;
-  private cacheRefreshTimer: number | null = null;
 
   /**
-   * 从页面根节点绑定画布与工具栏控件。
+   * 从页面根节点绑定 SVG 与工具栏控件。
    */
   public constructor(root: HTMLElement) {
-    const canvas = root.querySelector<HTMLCanvasElement>('#game');
+    const surface = root.querySelector<SVGSVGElement>('#game');
     const statusEl = root.querySelector<HTMLElement>('#status');
     const vertexCountInput = root.querySelector<HTMLInputElement>('#vertex-count');
     const seedInput = root.querySelector<HTMLInputElement>('#seed-input');
@@ -48,7 +47,7 @@ export class GameApp {
     const loadSeedBtn = root.querySelector<HTMLButtonElement>('#load-seed');
 
     if (
-      !canvas ||
+      !surface ||
       !statusEl ||
       !vertexCountInput ||
       !seedInput ||
@@ -60,13 +59,8 @@ export class GameApp {
       throw new Error('页面缺少必要的 #game / 工具栏节点');
     }
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      throw new Error('无法创建 2D 绘图上下文');
-    }
-
-    this.canvas = canvas;
-    this.ctx = ctx;
+    this.surface = surface;
+    this.graph = new SvgGraphView(surface);
     this.statusEl = statusEl;
     this.vertexCountInput = vertexCountInput;
     this.seedInput = seedInput;
@@ -78,6 +72,8 @@ export class GameApp {
     vertexCountInput.value = String(initialCount);
     this.deal = createDeal(initialCount);
     this.crossings.rebuild(this.deal);
+    this.graph.rebuild(this.deal);
+    this.graph.syncCrossings(this.crossings.getHotEdges());
     this.solved = this.crossings.isSolved();
     this.syncSeedField();
 
@@ -99,7 +95,7 @@ export class GameApp {
     window.visualViewport?.addEventListener('resize', () => this.resize());
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() => this.resize());
-      ro.observe(canvas);
+      ro.observe(surface);
     }
   }
 
@@ -113,32 +109,31 @@ export class GameApp {
     this.running = true;
     this.resize();
     this.resetView();
-    attachInput(this.canvas, this.camera, () => this.deal, {
+    attachInput(this.surface, this.camera, () => this.deal, {
       onChange: () => {
         if (this.activeVertexId !== null) {
           this.crossingsPending = true;
-        } else {
-          // 平移/缩放：延后按新缩放重烘焙，手势中只 blit
-          this.scheduleCacheRefresh();
+          this.geometryPending = true;
         }
         this.markDirty();
       },
       onDragEnd: () => {
         if (this.activeVertexId !== null) {
           this.crossings.updateAfterVertexMove(this.deal, this.activeVertexId);
+          this.graph.syncVertexDrag(this.deal, this.activeVertexId);
           this.crossingsPending = false;
+          this.geometryPending = false;
         }
         this.crossings.refreshSpatialIndex(this.deal);
-        this.paintCache.endDrag();
+        this.graph.syncCrossings(this.crossings.getHotEdges());
         this.solved = this.crossings.isSolved();
+        this.graph.setSolved(this.solved);
         this.updateStatus();
         this.markDirty();
       },
       onActiveVertex: (vertexId: number | null) => {
-        if (vertexId !== null) {
-          this.paintCache.beginDrag(vertexId);
-        }
         this.activeVertexId = vertexId;
+        this.graph.setActiveVertex(this.deal, vertexId);
         this.markDirty();
       },
     });
@@ -204,7 +199,6 @@ export class GameApp {
    */
   public resetView(): void {
     resetCameraToDeal(this.camera, this.deal);
-    this.paintCache.invalidate();
     this.markDirty();
   }
 
@@ -215,28 +209,17 @@ export class GameApp {
     this.deal = deal;
     this.crossings.rebuild(deal);
     this.crossingsPending = false;
-    this.paintCache.endDrag();
-    this.paintCache.invalidate();
+    this.geometryPending = false;
+    this.graph.rebuild(deal);
+    this.graph.syncCrossings(this.crossings.getHotEdges());
     this.solved = this.crossings.isSolved();
+    this.graph.setSolved(this.solved);
     this.activeVertexId = null;
+    this.graph.setActiveVertex(deal, null);
     this.syncSeedField();
     this.resetView();
     this.updateStatus();
     this.markDirty();
-  }
-
-  /**
-   * 平移/缩放停止后再按新倍率重烘焙，手势过程只用位图拉伸。
-   */
-  private scheduleCacheRefresh(): void {
-    if (this.cacheRefreshTimer !== null) {
-      window.clearTimeout(this.cacheRefreshTimer);
-    }
-    this.cacheRefreshTimer = window.setTimeout(() => {
-      this.cacheRefreshTimer = null;
-      this.paintCache.invalidate();
-      this.markDirty();
-    }, 120);
   }
 
   /**
@@ -264,57 +247,49 @@ export class GameApp {
   }
 
   /**
-   * 同步 canvas 分辨率与相机视口（兼容 Windows 125%/150% 等缩放）。
+   * 同步视口尺寸到相机（SVG 用 CSS 像素即可）。
    */
   private resize(): void {
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(1, this.canvas.clientWidth);
-    const height = Math.max(1, this.canvas.clientHeight);
-    const bufferW = Math.max(1, Math.round(width * dpr));
-    const bufferH = Math.max(1, Math.round(height * dpr));
-
-    if (this.canvas.width !== bufferW) {
-      this.canvas.width = bufferW;
-    }
-    if (this.canvas.height !== bufferH) {
-      this.canvas.height = bufferH;
-    }
-
-    this.camera.setViewport(width, height, dpr);
-    this.paintCache.invalidate();
+    const width = Math.max(1, this.surface.clientWidth);
+    const height = Math.max(1, this.surface.clientHeight);
+    this.camera.setViewport(width, height, window.devicePixelRatio || 1);
     this.markDirty();
   }
 
   /**
-   * 标记需要重绘。
+   * 标记需要刷新视图。
    */
   private markDirty(): void {
     this.needsDraw = true;
   }
 
   /**
-   * 渲染一帧；无变化时跳过绘制以省电。
+   * 每帧：合并判交与 DOM 几何更新；平移/缩放只改 transform。
    */
   private frame(): void {
     if (!this.running) {
       return;
     }
 
+    if (this.geometryPending && this.activeVertexId !== null) {
+      this.geometryPending = false;
+      this.graph.syncVertexDrag(this.deal, this.activeVertexId);
+    }
+
     if (this.crossingsPending && this.activeVertexId !== null) {
       this.crossingsPending = false;
       this.crossings.updateAfterVertexMove(this.deal, this.activeVertexId);
+      this.graph.syncCrossings(this.crossings.getHotEdges());
       this.solved = this.crossings.isSolved();
+      this.graph.setSolved(this.solved);
       this.updateStatus();
     }
 
     if (this.needsDraw) {
       this.needsDraw = false;
-      this.paintCache.paint(this.ctx, this.deal, this.camera, {
-        activeVertexId: this.activeVertexId,
-        solved: this.solved,
-        hotEdges: this.crossings.getHotEdges(),
-      });
+      this.graph.syncCamera(this.camera);
     }
+
     requestAnimationFrame(() => this.frame());
   }
 

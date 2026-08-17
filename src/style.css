@@ -95,4 +95,6 @@ button:active {
   touch-action: none;
   cursor: crosshair;
   outline: none;
+  background: #0f1419;
+  overflow: hidden;
 }
