@@ -13,7 +13,7 @@ import { resetCameraToDeal } from '../view/renderer';
 import { SvgGraphView } from '../view/svgGraph';
 
 /**
- * 组装可玩循环：生成、种子、SVG、手机手势、齿轮菜单。
+ * 组装可玩循环：生成、种子、SVG、手机手势、居中游戏菜单。
  */
 export class GameApp {
   private readonly root: HTMLElement;
@@ -57,7 +57,6 @@ export class GameApp {
     const loadSeedBtn = root.querySelector<HTMLButtonElement>('#load-seed');
     const menuOverlay = root.querySelector<HTMLElement>('#menu-overlay');
     const menuOpenBtn = root.querySelector<HTMLButtonElement>('#menu-open');
-    const menuDismissBtn = root.querySelector<HTMLButtonElement>('#menu-dismiss');
     const menuHintEl = root.querySelector<HTMLElement>('#menu-hint');
     const menuPanel = root.querySelector<HTMLElement>('#menu-panel');
 
@@ -72,7 +71,6 @@ export class GameApp {
       !loadSeedBtn ||
       !menuOverlay ||
       !menuOpenBtn ||
-      !menuDismissBtn ||
       !menuHintEl ||
       !menuPanel
     ) {
@@ -104,7 +102,6 @@ export class GameApp {
     this.syncSeedField();
 
     menuOpenBtn.addEventListener('click', () => this.openMenu());
-    menuDismissBtn.addEventListener('click', () => this.closeMenu());
     menuOverlay.addEventListener('click', () => this.closeMenu());
     menuPanel.addEventListener('click', (event) => event.stopPropagation());
 
@@ -255,7 +252,7 @@ export class GameApp {
     this.menuHintEl.textContent =
       parts.length > 0
         ? `${parts.join('；')}（返回游戏后生效）`
-        : '修改将在返回游戏后生效';
+        : '点击菜单外空白处返回游戏';
   }
 
   /**
