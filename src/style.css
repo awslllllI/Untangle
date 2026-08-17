@@ -26,6 +26,7 @@ body {
 }
 
 #app {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -42,6 +43,37 @@ body {
   border-bottom: 1px solid #243041;
   flex-shrink: 0;
   touch-action: manipulation;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+#app.toolbar-collapsed .toolbar {
+  display: none;
+}
+
+.toolbar-collapse {
+  margin-left: 0.25rem;
+}
+
+.toolbar-expand {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  border: 1px solid #3b4a5f;
+  background: rgba(28, 38, 51, 0.94);
+  color: inherit;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  touch-action: manipulation;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.toolbar-expand[hidden] {
+  display: none !important;
 }
 
 .field {

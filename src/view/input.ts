@@ -1,30 +1,55 @@
 import { distance } from '../core/geometry';
 import type { Deal, Vec2 } from '../core/types';
 import type { Camera } from './camera';
-import { VERTEX_RADIUS_WORLD } from './svgGraph';
+import { VERTEX_RADIUS_SCREEN } from './svgGraph';
 
 export type InputCallbacks = {
-  /** 请求重绘。 */
+  /** 相机变化（平移/缩放），请求刷新。 */
   onChange: () => void;
-  /** 顶点被拖动后（用于通关检测）。 */
+  /** 选中点被拖动，几何已变。 */
+  onVertexDrag: () => void;
+  /** 拖点手势结束（选中可保持）。 */
   onDragEnd: () => void;
-  /** 当前拖拽中的顶点，或 null。 */
-  onActiveVertex: (vertexId: number | null) => void;
+  /** 当前选中的顶点；null 表示未选中。 */
+  getSelectedVertexId: () => number | null;
+  /** 设置选中顶点（一次只能一个）。 */
+  setSelectedVertexId: (vertexId: number | null) => void;
+  /** 开始在图形区操作（用于收起工具栏）。 */
+  onGraphInteract?: () => void;
 };
 
 type PointerMode =
   | { kind: 'none' }
-  | { kind: 'drag-vertex'; pointerId: number; vertexId: number }
-  | { kind: 'pan'; pointerId: number; lastScreen: Vec2 }
+  | {
+      kind: 'pan';
+      pointerId: number;
+      lastScreen: Vec2;
+      downScreen: Vec2;
+      moved: boolean;
+    }
+  | {
+      kind: 'drag-vertex';
+      pointerId: number;
+      vertexId: number;
+      grabOffset: Vec2;
+      downScreen: Vec2;
+      moved: boolean;
+    }
   | {
       kind: 'pinch';
-      pointers: Map<number, Vec2>;
       lastDistance: number;
       lastMidpoint: Vec2;
+      /** 选中时双指只平移，不缩放。 */
+      panOnly: boolean;
     };
 
+const TAP_MOVE_PX = 12;
+
 /**
- * 绑定画布指针与滚轮：拖点 / 平移 / 双指缩放 / 滚轮缩放。
+ * 手机优先手势：
+ * - 未选中：单指平移，双指缩放
+ * - 已选中：单指拖点，双指平移；双指变单指后继续拖点
+ * - 轻点选中；拖点松手即取消选中；一次只能选一个点
  */
 export function attachInput(
   surface: SVGSVGElement,
@@ -47,17 +72,17 @@ export function attachInput(
   }
 
   /**
-   * 在屏幕空间命中最近顶点；半径与视觉圆一致（世界半径 × scale）。
+   * 屏幕空间命中顶点（半径与屏幕恒定圆点一致）。
    */
   function hitTestVertex(screen: Vec2, deal: Deal): number | null {
-    const hitRadius = VERTEX_RADIUS_WORLD * camera.scale + 8;
+    const hitRadius = VERTEX_RADIUS_SCREEN + 12;
     const hitRadiusSq = hitRadius * hitRadius;
     let bestId: number | null = null;
     let bestDistSq = hitRadiusSq;
     for (const v of deal.vertices) {
       const p = camera.worldToScreen(v.position);
-      const dx = screen.x - p.x;
-      const dy = screen.y - p.y;
+      const dx = p.x - screen.x;
+      const dy = p.y - screen.y;
       const dSq = dx * dx + dy * dy;
       if (dSq <= bestDistSq) {
         bestDistSq = dSq;
@@ -68,55 +93,81 @@ export function attachInput(
   }
 
   /**
-   * 进入或更新双指捏合状态。
+   * 进入拖点模式（保持选中点相对手指的抓取偏移）。
    */
-  function beginOrUpdatePinch(): void {
-    if (activePointers.size !== 2) {
-      return;
-    }
-    const points = [...activePointers.values()];
-    const lastDistance = distance(points[0], points[1]);
-    const lastMidpoint = {
-      x: (points[0].x + points[1].x) / 2,
-      y: (points[0].y + points[1].y) / 2,
-    };
+  function beginDragVertex(pointerId: number, screen: Vec2, vertexId: number): void {
+    const deal = getDeal();
+    const vertex = deal.vertices[vertexId];
+    const world = camera.screenToWorld(screen);
     mode = {
-      kind: 'pinch',
-      pointers: new Map(activePointers),
-      lastDistance: Math.max(1, lastDistance),
-      lastMidpoint,
+      kind: 'drag-vertex',
+      pointerId,
+      vertexId,
+      grabOffset: {
+        x: vertex.position.x - world.x,
+        y: vertex.position.y - world.y,
+      },
+      downScreen: screen,
+      moved: false,
     };
   }
 
   /**
-   * pointerdown：优先第二指进捏合，否则拖点或平移。
+   * 进入双指模式：未选中=捏合缩放；已选中=只平移。
+   */
+  function beginTwoFingerMode(): void {
+    if (activePointers.size !== 2) {
+      return;
+    }
+    const points = [...activePointers.values()];
+    const selected = callbacks.getSelectedVertexId();
+    mode = {
+      kind: 'pinch',
+      lastDistance: Math.max(1, distance(points[0], points[1])),
+      lastMidpoint: {
+        x: (points[0].x + points[1].x) / 2,
+        y: (points[0].y + points[1].y) / 2,
+      },
+      panOnly: selected !== null,
+    };
+  }
+
+  /**
+   * pointerdown。
    */
   function onPointerDown(event: PointerEvent): void {
     surface.setPointerCapture(event.pointerId);
+    callbacks.onGraphInteract?.();
     const screen = eventToScreen(event);
     activePointers.set(event.pointerId, screen);
 
     if (activePointers.size >= 2) {
-      beginOrUpdatePinch();
-      callbacks.onActiveVertex(null);
+      // 从拖点切到双指前先结束本轮拖点结算
+      if (mode.kind === 'drag-vertex') {
+        callbacks.onDragEnd();
+      }
+      beginTwoFingerMode();
       callbacks.onChange();
       return;
     }
 
-    const deal = getDeal();
-    const vertexId = hitTestVertex(screen, deal);
-    if (vertexId !== null) {
-      mode = { kind: 'drag-vertex', pointerId: event.pointerId, vertexId };
-      callbacks.onActiveVertex(vertexId);
+    const selected = callbacks.getSelectedVertexId();
+    if (selected !== null) {
+      beginDragVertex(event.pointerId, screen, selected);
     } else {
-      mode = { kind: 'pan', pointerId: event.pointerId, lastScreen: screen };
-      callbacks.onActiveVertex(null);
+      mode = {
+        kind: 'pan',
+        pointerId: event.pointerId,
+        lastScreen: screen,
+        downScreen: screen,
+        moved: false,
+      };
     }
     callbacks.onChange();
   }
 
   /**
-   * pointermove：拖点、平移或捏合缩放。
+   * pointermove。
    */
   function onPointerMove(event: PointerEvent): void {
     if (!activePointers.has(event.pointerId)) {
@@ -125,39 +176,58 @@ export function attachInput(
     const screen = eventToScreen(event);
     activePointers.set(event.pointerId, screen);
 
-    if (mode.kind === 'pinch' || activePointers.size >= 2) {
-      if (activePointers.size === 2) {
+    if (activePointers.size >= 2) {
+      if (mode.kind !== 'pinch') {
+        if (mode.kind === 'drag-vertex') {
+          callbacks.onDragEnd();
+        }
+        beginTwoFingerMode();
+      }
+      if (mode.kind === 'pinch' && activePointers.size === 2) {
         const points = [...activePointers.values()];
         const dist = Math.max(1, distance(points[0], points[1]));
         const mid = {
           x: (points[0].x + points[1].x) / 2,
           y: (points[0].y + points[1].y) / 2,
         };
-        if (mode.kind !== 'pinch') {
-          beginOrUpdatePinch();
-        } else {
+        if (!mode.panOnly) {
           const factor = dist / mode.lastDistance;
           camera.zoomAt(mid, factor);
-          camera.panByScreenDelta(mid.x - mode.lastMidpoint.x, mid.y - mode.lastMidpoint.y);
-          mode.lastDistance = dist;
-          mode.lastMidpoint = mid;
         }
+        camera.panByScreenDelta(mid.x - mode.lastMidpoint.x, mid.y - mode.lastMidpoint.y);
+        mode.lastDistance = dist;
+        mode.lastMidpoint = mid;
         callbacks.onChange();
       }
       return;
     }
 
     if (mode.kind === 'drag-vertex' && mode.pointerId === event.pointerId) {
+      if (
+        !mode.moved &&
+        distance(screen, mode.downScreen) > TAP_MOVE_PX
+      ) {
+        mode.moved = true;
+      }
       const deal = getDeal();
       const world = camera.screenToWorld(screen);
-      deal.vertices[mode.vertexId].position = world;
-      callbacks.onChange();
+      deal.vertices[mode.vertexId].position = {
+        x: world.x + mode.grabOffset.x,
+        y: world.y + mode.grabOffset.y,
+      };
+      callbacks.onVertexDrag();
       return;
     }
 
     if (mode.kind === 'pan' && mode.pointerId === event.pointerId) {
       const dx = screen.x - mode.lastScreen.x;
       const dy = screen.y - mode.lastScreen.y;
+      if (
+        !mode.moved &&
+        distance(screen, mode.downScreen) > TAP_MOVE_PX
+      ) {
+        mode.moved = true;
+      }
       camera.panByScreenDelta(dx, dy);
       mode.lastScreen = screen;
       callbacks.onChange();
@@ -165,30 +235,50 @@ export function attachInput(
   }
 
   /**
-   * pointerup / cancel：结束对应手势。
+   * pointerup / cancel。
    */
   function onPointerUp(event: PointerEvent): void {
-    const wasDragging =
+    const screen = eventToScreen(event);
+    const wasDrag =
       mode.kind === 'drag-vertex' && mode.pointerId === event.pointerId;
-    const draggedVertexId =
-      wasDragging && mode.kind === 'drag-vertex' ? mode.vertexId : null;
+    const wasPanTap =
+      mode.kind === 'pan' &&
+      mode.pointerId === event.pointerId &&
+      !mode.moved &&
+      distance(screen, mode.downScreen) <= TAP_MOVE_PX;
+
     activePointers.delete(event.pointerId);
 
-    // 先收尾拖点（此时 active 仍有效），再清高亮
-    if (wasDragging && draggedVertexId !== null) {
+    if (wasDrag) {
       callbacks.onDragEnd();
+      // 拖点松手即取消选中（无需再点空白）
+      callbacks.setSelectedVertexId(null);
+    }
+
+    if (wasPanTap) {
+      const hit = hitTestVertex(screen, getDeal());
+      callbacks.setSelectedVertexId(hit);
     }
 
     if (activePointers.size === 0) {
       mode = { kind: 'none' };
-      callbacks.onActiveVertex(null);
     } else if (activePointers.size === 1) {
       const [pointerId, lastScreen] = [...activePointers.entries()][0];
-      mode = { kind: 'pan', pointerId, lastScreen };
-      callbacks.onActiveVertex(null);
+      const selected = callbacks.getSelectedVertexId();
+      if (selected !== null) {
+        // 双指变单指且仍选中：切到拖点
+        beginDragVertex(pointerId, lastScreen, selected);
+      } else {
+        mode = {
+          kind: 'pan',
+          pointerId,
+          lastScreen,
+          downScreen: lastScreen,
+          moved: true,
+        };
+      }
     } else {
-      beginOrUpdatePinch();
-      callbacks.onActiveVertex(null);
+      beginTwoFingerMode();
     }
 
     callbacks.onChange();
@@ -199,6 +289,7 @@ export function attachInput(
    */
   function onWheel(event: WheelEvent): void {
     event.preventDefault();
+    callbacks.onGraphInteract?.();
     const rect = surface.getBoundingClientRect();
     const screen = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const factor = event.deltaY < 0 ? 1.08 : 1 / 1.08;

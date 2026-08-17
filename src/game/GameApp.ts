@@ -13,9 +13,10 @@ import { resetCameraToDeal } from '../view/renderer';
 import { SvgGraphView } from '../view/svgGraph';
 
 /**
- * 组装可玩循环：生成、种子复现、SVG 矢量渲染、交互、通关、工具栏。
+ * 组装可玩循环：生成、种子、SVG、手机手势、可收起工具栏。
  */
 export class GameApp {
+  private readonly root: HTMLElement;
   private readonly surface: SVGSVGElement;
   private readonly camera = new Camera();
   private readonly crossings = new CrossingTracker();
@@ -23,6 +24,7 @@ export class GameApp {
   private readonly statusEl: HTMLElement;
   private readonly vertexCountInput: HTMLInputElement;
   private readonly seedInput: HTMLInputElement;
+  private readonly toolbarExpandBtn: HTMLButtonElement;
 
   private deal: Deal;
   private solved = false;
@@ -45,6 +47,8 @@ export class GameApp {
     const resetViewBtn = root.querySelector<HTMLButtonElement>('#reset-view');
     const copySeedBtn = root.querySelector<HTMLButtonElement>('#copy-seed');
     const loadSeedBtn = root.querySelector<HTMLButtonElement>('#load-seed');
+    const toolbarExpandBtn = root.querySelector<HTMLButtonElement>('#toolbar-expand');
+    const toolbarCollapseBtn = root.querySelector<HTMLButtonElement>('#toolbar-collapse');
 
     if (
       !surface ||
@@ -54,16 +58,20 @@ export class GameApp {
       !rerollBtn ||
       !resetViewBtn ||
       !copySeedBtn ||
-      !loadSeedBtn
+      !loadSeedBtn ||
+      !toolbarExpandBtn ||
+      !toolbarCollapseBtn
     ) {
       throw new Error('页面缺少必要的 #game / 工具栏节点');
     }
 
+    this.root = root;
     this.surface = surface;
     this.graph = new SvgGraphView(surface);
     this.statusEl = statusEl;
     this.vertexCountInput = vertexCountInput;
     this.seedInput = seedInput;
+    this.toolbarExpandBtn = toolbarExpandBtn;
 
     vertexCountInput.min = String(VERTEX_COUNT_MIN);
     vertexCountInput.max = String(VERTEX_COUNT_HARD_CAP);
@@ -90,6 +98,8 @@ export class GameApp {
         this.loadSeedFromInput();
       }
     });
+    toolbarCollapseBtn.addEventListener('click', () => this.setToolbarCollapsed(true));
+    toolbarExpandBtn.addEventListener('click', () => this.setToolbarCollapsed(false));
 
     window.addEventListener('resize', () => this.resize());
     window.visualViewport?.addEventListener('resize', () => this.resize());
@@ -111,10 +121,11 @@ export class GameApp {
     this.resetView();
     attachInput(this.surface, this.camera, () => this.deal, {
       onChange: () => {
-        if (this.activeVertexId !== null) {
-          this.crossingsPending = true;
-          this.geometryPending = true;
-        }
+        this.markDirty();
+      },
+      onVertexDrag: () => {
+        this.crossingsPending = true;
+        this.geometryPending = true;
         this.markDirty();
       },
       onDragEnd: () => {
@@ -131,14 +142,26 @@ export class GameApp {
         this.updateStatus();
         this.markDirty();
       },
-      onActiveVertex: (vertexId: number | null) => {
+      getSelectedVertexId: () => this.activeVertexId,
+      setSelectedVertexId: (vertexId) => {
         this.activeVertexId = vertexId;
         this.graph.setActiveVertex(this.deal, vertexId);
         this.markDirty();
       },
+      onGraphInteract: () => this.setToolbarCollapsed(true),
     });
     this.updateStatus();
     requestAnimationFrame(() => this.frame());
+  }
+
+  /**
+   * 收起或展开顶部工具栏。
+   */
+  private setToolbarCollapsed(collapsed: boolean): void {
+    this.root.classList.toggle('toolbar-collapsed', collapsed);
+    this.toolbarExpandBtn.hidden = !collapsed;
+    // 工具栏显隐会改变画布高度
+    requestAnimationFrame(() => this.resize());
   }
 
   /**
@@ -247,7 +270,7 @@ export class GameApp {
   }
 
   /**
-   * 同步视口尺寸到相机（SVG 用 CSS 像素即可）。
+   * 同步视口尺寸到相机。
    */
   private resize(): void {
     const width = Math.max(1, this.surface.clientWidth);
@@ -264,7 +287,7 @@ export class GameApp {
   }
 
   /**
-   * 每帧：合并判交与 DOM 几何更新；平移/缩放只改 transform。
+   * 每帧：合并判交与几何更新；平移/缩放只改 transform。
    */
   private frame(): void {
     if (!this.running) {

@@ -4,17 +4,14 @@ import { DEFAULT_THEME } from './theme';
 
 const NS = 'http://www.w3.org/2000/svg';
 
-/** 顶点在世界坐标下的基础半径（随相机 scale 放大到屏幕上）。 */
-export const VERTEX_RADIUS_WORLD = 9;
+/** 顶点在屏幕上的目标半径（px），与设备无关，保证点线比例一致。 */
+export const VERTEX_RADIUS_SCREEN = 14;
 
-/** 选中顶点相对基础半径的放大。 */
-const ACTIVE_RADIUS_WORLD = 11;
-
-/** 邻点相对基础半径的放大（仅作引导，不改边样式）。 */
-const LINKED_RADIUS_WORLD = 10;
+/** 边在屏幕上的描边宽度（px）。 */
+export const EDGE_STROKE_SCREEN = 2.5;
 
 /**
- * SVG 矢量图场景：相机只改 transform；选中高亮邻点，不改边的粗细/亮度。
+ * SVG 矢量图场景：点半径按屏幕像素反算到世界坐标，缩放后点线比例稳定。
  */
 export class SvgGraphView {
   private readonly svg: SVGSVGElement;
@@ -26,6 +23,7 @@ export class SvgGraphView {
   private incidentCache: number[][] = [];
   private activeVertexId: number | null = null;
   private linkedNeighborIds: number[] = [];
+  private lastScale = 1;
 
   /**
    * 绑定页面上的 SVG 根节点。
@@ -63,7 +61,7 @@ export class SvgGraphView {
       const e = deal.edges[i];
       const line = document.createElementNS(NS, 'line');
       line.setAttribute('stroke', DEFAULT_THEME.edge);
-      line.setAttribute('stroke-width', '2');
+      line.setAttribute('stroke-width', String(EDGE_STROKE_SCREEN));
       line.setAttribute('stroke-linecap', 'round');
       line.setAttribute('vector-effect', 'non-scaling-stroke');
       line.setAttribute('fill', 'none');
@@ -75,7 +73,7 @@ export class SvgGraphView {
 
     for (const v of deal.vertices) {
       const circle = document.createElementNS(NS, 'circle');
-      circle.setAttribute('r', String(VERTEX_RADIUS_WORLD));
+      circle.setAttribute('r', '1');
       circle.setAttribute('fill', DEFAULT_THEME.vertex);
       circle.setAttribute('stroke', DEFAULT_THEME.vertexStroke);
       circle.setAttribute('stroke-width', '2');
@@ -86,17 +84,20 @@ export class SvgGraphView {
     }
 
     this.syncAllGeometry(deal);
+    this.applyVertexRadii(this.lastScale);
   }
 
   /**
-   * 同步相机：仅更新世界组 transform（平移/缩放不重画几何）。
+   * 同步相机 transform，并刷新屏幕恒定点半径。
    */
   public syncCamera(camera: Camera): void {
+    this.lastScale = camera.scale;
     const t = `translate(${camera.width / 2} ${camera.height / 2}) scale(${camera.scale}) translate(${-camera.center.x} ${-camera.center.y})`;
     this.world.setAttribute('transform', t);
     this.svg.setAttribute('viewBox', `0 0 ${camera.width} ${camera.height}`);
     this.svg.setAttribute('width', String(camera.width));
     this.svg.setAttribute('height', String(camera.height));
+    this.applyVertexRadii(camera.scale);
   }
 
   /**
@@ -117,7 +118,7 @@ export class SvgGraphView {
   }
 
   /**
-   * 拖点后只更新该点及其关联边（避免每帧改全部 DOM）。
+   * 拖点后只更新该点及其关联边。
    */
   public syncVertexDrag(deal: Deal, vertexId: number): void {
     const v = deal.vertices[vertexId];
@@ -126,19 +127,17 @@ export class SvgGraphView {
       el.setAttribute('cx', String(v.position.x));
       el.setAttribute('cy', String(v.position.y));
     }
-    const incident = this.incidentCache[vertexId] ?? [];
-    for (const edgeIndex of incident) {
+    for (const edgeIndex of this.incidentCache[vertexId] ?? []) {
       this.syncEdgeGeometry(deal, edgeIndex);
     }
   }
 
   /**
-   * 按交叉集合更新边颜色；粗细与选中态无关。
+   * 按交叉集合更新边颜色；粗细不变。
    */
   public syncCrossings(hotEdges: ReadonlySet<number>): void {
     for (let i = 0; i < this.edgeEls.length; i += 1) {
-      const line = this.edgeEls[i];
-      line.setAttribute(
+      this.edgeEls[i].setAttribute(
         'stroke',
         hotEdges.has(i) ? DEFAULT_THEME.edgeCrossing : DEFAULT_THEME.edge,
       );
@@ -146,7 +145,7 @@ export class SvgGraphView {
   }
 
   /**
-   * 高亮当前点与邻点（只改点填充/半径，不改边样式）。
+   * 高亮当前点与邻点（只改点，不改边）。
    */
   public setActiveVertex(deal: Deal, vertexId: number | null): void {
     this.clearVertexHighlights();
@@ -154,13 +153,13 @@ export class SvgGraphView {
     this.linkedNeighborIds = [];
 
     if (vertexId === null) {
+      this.applyVertexRadii(this.lastScale);
       return;
     }
 
     const activeEl = this.vertexEls[vertexId];
     if (activeEl) {
       activeEl.setAttribute('fill', DEFAULT_THEME.vertexActive);
-      activeEl.setAttribute('r', String(ACTIVE_RADIUS_WORLD));
     }
 
     const neighbors = new Set<number>();
@@ -179,9 +178,10 @@ export class SvgGraphView {
       }
       el.setAttribute('fill', DEFAULT_THEME.vertexLinked);
       el.setAttribute('stroke', DEFAULT_THEME.vertexLinkedStroke);
-      el.setAttribute('r', String(LINKED_RADIUS_WORLD));
       this.linkedNeighborIds.push(id);
     }
+
+    this.applyVertexRadii(this.lastScale);
   }
 
   /**
@@ -189,6 +189,30 @@ export class SvgGraphView {
    */
   public setSolved(solved: boolean): void {
     this.svg.style.backgroundColor = solved ? '#143022' : DEFAULT_THEME.background;
+  }
+
+  /**
+   * 把屏幕像素半径换算为世界半径并写回各点。
+   */
+  private applyVertexRadii(scale: number): void {
+    const s = Math.max(1e-6, scale);
+    const base = VERTEX_RADIUS_SCREEN / s;
+    const linked = (VERTEX_RADIUS_SCREEN + 2) / s;
+    const active = (VERTEX_RADIUS_SCREEN + 4) / s;
+
+    for (let id = 0; id < this.vertexEls.length; id += 1) {
+      const el = this.vertexEls[id];
+      if (!el) {
+        continue;
+      }
+      if (id === this.activeVertexId) {
+        el.setAttribute('r', String(active));
+      } else if (this.linkedNeighborIds.includes(id)) {
+        el.setAttribute('r', String(linked));
+      } else {
+        el.setAttribute('r', String(base));
+      }
+    }
   }
 
   /**
@@ -200,7 +224,6 @@ export class SvgGraphView {
       if (prev) {
         prev.setAttribute('fill', DEFAULT_THEME.vertex);
         prev.setAttribute('stroke', DEFAULT_THEME.vertexStroke);
-        prev.setAttribute('r', String(VERTEX_RADIUS_WORLD));
       }
     }
     for (const id of this.linkedNeighborIds) {
@@ -210,7 +233,6 @@ export class SvgGraphView {
       }
       el.setAttribute('fill', DEFAULT_THEME.vertex);
       el.setAttribute('stroke', DEFAULT_THEME.vertexStroke);
-      el.setAttribute('r', String(VERTEX_RADIUS_WORLD));
     }
   }
 

@@ -24,8 +24,18 @@
         </label>
         <button type="button" id="copy-seed">复制</button>
         <button type="button" id="load-seed">加载</button>
+        <button type="button" id="toolbar-collapse" class="toolbar-collapse" title="收起">收起</button>
         <span class="status" id="status" aria-live="polite"></span>
       </header>
+      <button
+        type="button"
+        id="toolbar-expand"
+        class="toolbar-expand"
+        aria-label="展开工具栏"
+        hidden
+      >
+        菜单
+      </button>
       <svg id="game" tabindex="0" aria-label="解缠画布"></svg>
     </div>
     <script type="module" src="/src/main.ts"></script>
