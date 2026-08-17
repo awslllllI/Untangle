@@ -72,12 +72,17 @@ body {
   font-size: 0.85rem;
   color: var(--muted);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
-  max-width: calc(100% - 3.5rem);
+  max-width: calc(100% - 6.5rem);
   pointer-events: none;
 }
 
-.menu-gear {
+.hud-actions {
+  display: flex;
+  gap: 0.45rem;
   pointer-events: auto;
+}
+
+.hud-icon {
   flex-shrink: 0;
   width: 2.5rem;
   height: 2.5rem;
@@ -90,12 +95,45 @@ body {
   color: #d7e2f0;
   border-radius: 50%;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
+  user-select: none;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
-.menu-gear:active {
+.hud-icon:active {
   background: #243041;
+}
+
+.restart-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  background: #000;
+  pointer-events: none;
+  opacity: 1;
+  /* 由 JS 设置从按钮中心向外侵蚀的圆形遮罩 */
+  -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 0, transparent 0);
+  mask-image: radial-gradient(circle at 50% 50%, transparent 0, transparent 0);
+}
+
+.celebrate-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.celebrate-layer[hidden] {
+  display: none !important;
+}
+
+.celebrate-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .menu-overlay {
@@ -160,6 +198,10 @@ body {
   gap: 0.65rem;
 }
 
+.menu-section-deal {
+  background: rgba(30, 58, 95, 0.22);
+}
+
 .menu-section-title {
   margin: 0;
   font-size: 0.72rem;
@@ -180,7 +222,8 @@ body {
   color: #c5d2e4;
 }
 
-.menu-field input {
+.menu-field input[type='text'],
+.menu-field input[type='number'] {
   width: 100%;
   padding: 0.65rem 0.75rem;
   border-radius: 10px;
@@ -194,6 +237,61 @@ body {
 #seed-input {
   font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
   font-size: 0.9rem;
+}
+
+.stepper {
+  display: grid;
+  grid-template-columns: 2.75rem 1fr 2.75rem;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+  touch-action: pan-y;
+}
+
+.stepper input {
+  width: 100%;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  text-align: center;
+  font-size: 1.15rem !important;
+  font-variant-numeric: tabular-nums;
+  padding: 0.7rem 0.35rem !important;
+  -moz-appearance: textfield;
+}
+
+.stepper input::-webkit-outer-spin-button,
+.stepper input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.stepper-btn {
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: #1c2838;
+  color: inherit;
+  font: inherit;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.stepper-btn:active {
+  background: #243447;
+}
+
+.stepper #vertex-dec {
+  border-right: 1px solid var(--line);
+}
+
+.stepper #vertex-inc {
+  border-left: 1px solid var(--line);
 }
 
 .menu-row {
@@ -226,6 +324,17 @@ body {
   width: 100%;
 }
 
+.menu-btn-accent {
+  border-color: #4a7ec7;
+  background: var(--accent-soft);
+  color: #dcecff;
+  font-weight: 600;
+}
+
+.menu-btn-accent:active {
+  background: #274a73;
+}
+
 .menu-btn.pending {
   border-color: var(--accent);
   background: #243a55;
@@ -245,7 +354,7 @@ body {
   min-height: 1.2em;
 }
 
-#app.menu-open .menu-gear {
+#app.menu-open .hud-actions {
   visibility: hidden;
 }
 

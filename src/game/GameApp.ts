@@ -8,12 +8,18 @@ import {
   VERTEX_COUNT_PERF_HINT,
 } from '../core/types';
 import { Camera } from '../view/camera';
+import { createConfettiLayer } from '../view/confetti';
 import { attachInput } from '../view/input';
 import { resetCameraToDeal } from '../view/renderer';
 import { SvgGraphView } from '../view/svgGraph';
 
+/** 长按重开：总时长（ms），侵蚀圆前快后慢直至铺满。 */
+const RESTART_HOLD_MS = 1100;
+/** 长按开始时立刻给出的侵蚀进度，便于感知生效。 */
+const RESTART_VEIL_KICK = 0.12;
+
 /**
- * 组装可玩循环：生成、种子、SVG、手机手势、居中游戏菜单。
+ * 组装可玩循环：生成、种子、SVG、菜单、通关彩花、长按重开。
  */
 export class GameApp {
   private readonly root: HTMLElement;
@@ -26,12 +32,15 @@ export class GameApp {
   private readonly seedInput: HTMLInputElement;
   private readonly menuOverlay: HTMLElement;
   private readonly menuHintEl: HTMLElement;
-  private readonly rerollBtn: HTMLButtonElement;
   private readonly resetViewBtn: HTMLButtonElement;
   private readonly loadSeedBtn: HTMLButtonElement;
+  private readonly restartBtn: HTMLButtonElement;
+  private readonly restartVeil: HTMLElement;
+  private readonly confetti: ReturnType<typeof createConfettiLayer>;
 
   private deal: Deal;
   private solved = false;
+  private celebrationArmed = false;
   private activeVertexId: number | null = null;
   private needsDraw = true;
   private crossingsPending = false;
@@ -39,12 +48,19 @@ export class GameApp {
   private running = false;
   private statusFlash: string | null = null;
   private menuOpen = false;
-  private pendingReroll = false;
   private pendingLoadSeed = false;
   private pendingResetView = false;
+  private restartHolding = false;
+  private restartProgress = 0;
+  private restartRaf = 0;
+  private restartStartedAt = 0;
+  private restartOriginX = 0;
+  private restartOriginY = 0;
+  private restartMaxRadius = 1;
+  private stepperRepeatTimer = 0;
 
   /**
-   * 从页面根节点绑定 SVG 与菜单控件。
+   * 从页面根节点绑定 SVG、菜单与 HUD 控件。
    */
   public constructor(root: HTMLElement) {
     const surface = root.querySelector<SVGSVGElement>('#game');
@@ -59,6 +75,11 @@ export class GameApp {
     const menuOpenBtn = root.querySelector<HTMLButtonElement>('#menu-open');
     const menuHintEl = root.querySelector<HTMLElement>('#menu-hint');
     const menuPanel = root.querySelector<HTMLElement>('#menu-panel');
+    const vertexDecBtn = root.querySelector<HTMLButtonElement>('#vertex-dec');
+    const vertexIncBtn = root.querySelector<HTMLButtonElement>('#vertex-inc');
+    const vertexStepper = root.querySelector<HTMLElement>('#vertex-stepper');
+    const restartBtn = root.querySelector<HTMLButtonElement>('#restart-hold');
+    const restartVeil = root.querySelector<HTMLElement>('#restart-veil');
 
     if (
       !surface ||
@@ -72,7 +93,12 @@ export class GameApp {
       !menuOverlay ||
       !menuOpenBtn ||
       !menuHintEl ||
-      !menuPanel
+      !menuPanel ||
+      !vertexDecBtn ||
+      !vertexIncBtn ||
+      !vertexStepper ||
+      !restartBtn ||
+      !restartVeil
     ) {
       throw new Error('页面缺少必要的 #game / 菜单节点');
     }
@@ -85,9 +111,11 @@ export class GameApp {
     this.seedInput = seedInput;
     this.menuOverlay = menuOverlay;
     this.menuHintEl = menuHintEl;
-    this.rerollBtn = rerollBtn;
     this.resetViewBtn = resetViewBtn;
     this.loadSeedBtn = loadSeedBtn;
+    this.restartBtn = restartBtn;
+    this.restartVeil = restartVeil;
+    this.confetti = createConfettiLayer(root);
 
     vertexCountInput.min = String(VERTEX_COUNT_MIN);
     vertexCountInput.max = String(VERTEX_COUNT_HARD_CAP);
@@ -105,11 +133,15 @@ export class GameApp {
     menuOverlay.addEventListener('click', () => this.closeMenu());
     menuPanel.addEventListener('click', (event) => event.stopPropagation());
 
-    rerollBtn.addEventListener('click', () => this.queueMenuAction('reroll'));
+    rerollBtn.addEventListener('click', () => this.rerollAndReturn());
     resetViewBtn.addEventListener('click', () => this.queueMenuAction('reset-view'));
     loadSeedBtn.addEventListener('click', () => this.queueMenuAction('load-seed'));
     copySeedBtn.addEventListener('click', () => {
       void this.copySeed();
+    });
+    vertexCountInput.addEventListener('change', () => {
+      this.normalizeVertexCountInput();
+      this.refreshMenuHint();
     });
     vertexCountInput.addEventListener('input', () => this.refreshMenuHint());
     seedInput.addEventListener('input', () => this.refreshMenuHint());
@@ -117,6 +149,28 @@ export class GameApp {
       if (event.key === 'Enter') {
         event.preventDefault();
         this.queueMenuAction('load-seed');
+      }
+    });
+
+    this.bindStepper(vertexDecBtn, -1);
+    this.bindStepper(vertexIncBtn, 1);
+    vertexStepper.addEventListener(
+      'wheel',
+      (event) => {
+        event.preventDefault();
+        this.nudgeVertexCount(event.deltaY < 0 ? 1 : -1);
+      },
+      { passive: false },
+    );
+
+    this.bindRestartHold(restartBtn);
+    this.confetti.element.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.celebrationArmed) {
+        this.celebrationArmed = false;
+        this.confetti.clear();
+        this.reroll();
       }
     });
 
@@ -156,9 +210,7 @@ export class GameApp {
         }
         this.crossings.refreshSpatialIndex(this.deal);
         this.graph.syncCrossings(this.crossings.getHotEdges());
-        this.solved = this.crossings.isSolved();
-        this.graph.setSolved(this.solved);
-        this.updateStatus();
+        this.setSolvedState(this.crossings.isSolved());
         this.markDirty();
       },
       onActiveVertex: (vertexId) => {
@@ -172,11 +224,195 @@ export class GameApp {
   }
 
   /**
+   * 绑定顶点数加减：点击与按住连发。
+   */
+  private bindStepper(button: HTMLButtonElement, delta: number): void {
+    const stop = (): void => {
+      if (this.stepperRepeatTimer) {
+        window.clearInterval(this.stepperRepeatTimer);
+        this.stepperRepeatTimer = 0;
+      }
+    };
+
+    button.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      button.setPointerCapture(event.pointerId);
+      this.nudgeVertexCount(delta);
+      stop();
+      this.stepperRepeatTimer = window.setInterval(() => {
+        this.nudgeVertexCount(delta);
+      }, 90);
+    });
+    button.addEventListener('pointerup', stop);
+    button.addEventListener('pointercancel', stop);
+    button.addEventListener('lostpointercapture', stop);
+  }
+
+  /**
+   * 步进顶点数并刷新菜单提示。
+   */
+  private nudgeVertexCount(delta: number): void {
+    const current = clampVertexCount(Number(this.vertexCountInput.value) || 8);
+    const next = clampVertexCount(current + delta);
+    this.vertexCountInput.value = String(next);
+    this.refreshMenuHint();
+  }
+
+  /**
+   * 校正输入框内的顶点数。
+   */
+  private normalizeVertexCountInput(): void {
+    const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
+    this.vertexCountInput.value = String(n);
+  }
+
+  /**
+   * 绑定长按重开：从按钮向外侵蚀铺满（先快后慢），完成后重启本局。
+   */
+  private bindRestartHold(button: HTMLButtonElement): void {
+    const begin = (event: PointerEvent): void => {
+      if (this.menuOpen || this.celebrationArmed) {
+        return;
+      }
+      event.preventDefault();
+      button.setPointerCapture(event.pointerId);
+      this.startRestartHold();
+    };
+    const end = (): void => {
+      this.cancelRestartHold();
+    };
+
+    button.addEventListener('pointerdown', begin);
+    button.addEventListener('pointerup', end);
+    button.addEventListener('pointercancel', end);
+    button.addEventListener('lostpointercapture', end);
+  }
+
+  /**
+   * 记录从重开按钮中心铺满屏幕所需的最大半径。
+   */
+  private captureRestartOrigin(): void {
+    const app = this.root.getBoundingClientRect();
+    const btn = this.restartBtn.getBoundingClientRect();
+    const x = btn.left + btn.width / 2 - app.left;
+    const y = btn.top + btn.height / 2 - app.top;
+    const w = app.width;
+    const h = app.height;
+    this.restartOriginX = x;
+    this.restartOriginY = y;
+    this.restartMaxRadius = Math.max(
+      Math.hypot(x, y),
+      Math.hypot(w - x, y),
+      Math.hypot(x, h - y),
+      Math.hypot(w - x, h - y),
+      1,
+    );
+  }
+
+  /**
+   * 按进度更新从按钮中心向外侵蚀的黑色遮罩（边缘略软）。
+   */
+  private paintRestartVeil(progress: number): void {
+    const p = Math.max(0, Math.min(1, progress));
+    this.restartProgress = p;
+    if (p <= 0.001) {
+      this.restartVeil.style.webkitMaskImage = 'none';
+      this.restartVeil.style.maskImage = 'none';
+      this.restartVeil.style.opacity = '0';
+      return;
+    }
+    const r = p * this.restartMaxRadius;
+    const feather = Math.min(56, Math.max(12, r * 0.28));
+    const hard = Math.max(0, r - feather);
+    const gradient = `radial-gradient(circle at ${this.restartOriginX}px ${this.restartOriginY}px, #000 0, #000 ${hard}px, transparent ${r}px)`;
+    this.restartVeil.style.opacity = '1';
+    this.restartVeil.style.webkitMaskImage = gradient;
+    this.restartVeil.style.maskImage = gradient;
+  }
+
+  /**
+   * 开始长按侵蚀进度。
+   */
+  private startRestartHold(): void {
+    this.cancelRestartHold(false);
+    this.captureRestartOrigin();
+    this.restartHolding = true;
+    this.restartStartedAt = performance.now();
+    this.paintRestartVeil(RESTART_VEIL_KICK);
+
+    const step = (now: number): void => {
+      if (!this.restartHolding) {
+        return;
+      }
+      const elapsed = now - this.restartStartedAt;
+      const t = Math.min(1, elapsed / RESTART_HOLD_MS);
+      // 前快后慢：圆先迅速胀开，后半段放慢以确认长按
+      const eased = 1 - (1 - t) ** 2.6;
+      const progress = RESTART_VEIL_KICK + (1 - RESTART_VEIL_KICK) * eased;
+      this.paintRestartVeil(progress);
+      if (t >= 1) {
+        this.restartHolding = false;
+        this.restartRaf = 0;
+        this.completeRestartHold();
+        return;
+      }
+      this.restartRaf = requestAnimationFrame(step);
+    };
+    this.restartRaf = requestAnimationFrame(step);
+  }
+
+  /**
+   * 取消长按：侵蚀圆快速缩回按钮。
+   */
+  private cancelRestartHold(animateOut = true): void {
+    if (this.restartRaf) {
+      cancelAnimationFrame(this.restartRaf);
+      this.restartRaf = 0;
+    }
+    if (!this.restartHolding && this.restartProgress <= 0) {
+      return;
+    }
+    this.restartHolding = false;
+    if (!animateOut) {
+      this.paintRestartVeil(0);
+      return;
+    }
+    const from = this.restartProgress;
+    const started = performance.now();
+    const shrink = (now: number): void => {
+      const u = Math.min(1, (now - started) / 200);
+      // 收回时也略偏快收
+      const eased = u * u;
+      this.paintRestartVeil(from * (1 - eased));
+      if (u < 1) {
+        this.restartRaf = requestAnimationFrame(shrink);
+      } else {
+        this.paintRestartVeil(0);
+        this.restartRaf = 0;
+      }
+    };
+    this.restartRaf = requestAnimationFrame(shrink);
+  }
+
+  /**
+   * 侵蚀铺满后：同种子重建本局（点位回到圆上）。
+   */
+  private completeRestartHold(): void {
+    this.paintRestartVeil(1);
+    this.restartCurrentDeal();
+    window.setTimeout(() => {
+      this.paintRestartVeil(0);
+    }, 140);
+  }
+
+  /**
    * 打开菜单：填入当前局草稿，暂不改游戏状态。
    */
   private openMenu(): void {
+    if (this.celebrationArmed) {
+      return;
+    }
     this.menuOpen = true;
-    this.pendingReroll = false;
     this.pendingLoadSeed = false;
     this.pendingResetView = false;
     this.vertexCountInput.value = String(this.deal.vertices.length);
@@ -198,26 +434,31 @@ export class GameApp {
     this.menuOverlay.hidden = true;
     this.root.classList.remove('menu-open');
     this.applyMenuChanges();
-    this.pendingReroll = false;
     this.pendingLoadSeed = false;
     this.pendingResetView = false;
     this.syncPendingButtons();
   }
 
   /**
-   * 在菜单里标记待生效动作（随机与加载互斥；重置视图可并存）。
+   * 随机一局并立即返回游戏。
    */
-  private queueMenuAction(action: 'reroll' | 'load-seed' | 'reset-view'): void {
-    if (action === 'reroll') {
-      this.pendingReroll = !this.pendingReroll;
-      if (this.pendingReroll) {
-        this.pendingLoadSeed = false;
-      }
-    } else if (action === 'load-seed') {
+  private rerollAndReturn(): void {
+    this.pendingLoadSeed = false;
+    this.pendingResetView = false;
+    this.normalizeVertexCountInput();
+    this.menuOpen = false;
+    this.menuOverlay.hidden = true;
+    this.root.classList.remove('menu-open');
+    this.syncPendingButtons();
+    this.reroll();
+  }
+
+  /**
+   * 在菜单里标记待生效动作。
+   */
+  private queueMenuAction(action: 'load-seed' | 'reset-view'): void {
+    if (action === 'load-seed') {
       this.pendingLoadSeed = !this.pendingLoadSeed;
-      if (this.pendingLoadSeed) {
-        this.pendingReroll = false;
-      }
     } else {
       this.pendingResetView = !this.pendingResetView;
     }
@@ -229,7 +470,6 @@ export class GameApp {
    * 同步待生效按钮高亮。
    */
   private syncPendingButtons(): void {
-    this.rerollBtn.classList.toggle('pending', this.pendingReroll);
     this.loadSeedBtn.classList.toggle('pending', this.pendingLoadSeed);
     this.resetViewBtn.classList.toggle('pending', this.pendingResetView);
   }
@@ -243,20 +483,20 @@ export class GameApp {
     const parts: string[] = [];
     if (this.pendingLoadSeed) {
       parts.push('将加载种子');
-    } else if (this.pendingReroll || countChanged) {
-      parts.push(countChanged ? `将生成 ${n} 点新局` : '将随机新局');
+    } else if (countChanged) {
+      parts.push(`将生成 ${n} 点新局`);
     }
     if (this.pendingResetView) {
       parts.push('将重置视图');
     }
     this.menuHintEl.textContent =
       parts.length > 0
-        ? `${parts.join('；')}（返回游戏后生效）`
+        ? `${parts.join('；')}（点空白处返回后生效）`
         : '点击菜单外空白处返回游戏';
   }
 
   /**
-   * 退出菜单时应用草稿：加载种子 / 随机 / 顶点数变更 / 重置视图。
+   * 退出菜单时应用草稿（不含随机一局，随机已即时返回）。
    */
   private applyMenuChanges(): void {
     const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
@@ -267,12 +507,11 @@ export class GameApp {
     if (this.pendingLoadSeed) {
       this.loadSeedFromInput();
       dealChanged = true;
-    } else if (this.pendingReroll || countChanged) {
+    } else if (countChanged) {
       this.reroll();
       dealChanged = true;
     }
 
-    // 新局本身会重置视图；仅在未换局时单独执行重置
     if (this.pendingResetView && !dealChanged) {
       this.resetView();
     }
@@ -282,6 +521,7 @@ export class GameApp {
    * 按当前顶点数重新生成一局，并刷新种子。
    */
   public reroll(): void {
+    this.clearCelebration();
     const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
     this.vertexCountInput.value = String(n);
     if (n >= VERTEX_COUNT_PERF_HINT) {
@@ -295,9 +535,21 @@ export class GameApp {
   }
 
   /**
+   * 用当前种子重建本局（布局回到初始圆）。
+   */
+  private restartCurrentDeal(): void {
+    this.clearCelebration();
+    const n = this.deal.vertices.length;
+    this.vertexCountInput.value = String(n);
+    this.applyDeal(createDeal(n, this.deal.generationSeed));
+    this.flashStatus('已重开本局');
+  }
+
+  /**
    * 从种子输入框加载并复现同一局。
    */
   public loadSeedFromInput(): void {
+    this.clearCelebration();
     const payload = decodeSeed(this.seedInput.value);
     if (!payload) {
       this.flashStatus('种子无效，格式如 v1-8-a1b2c3d4');
@@ -343,6 +595,7 @@ export class GameApp {
    * 应用新局并重置通关/视图/种子展示。
    */
   private applyDeal(deal: Deal): void {
+    this.clearCelebration();
     this.deal = deal;
     this.crossings.rebuild(deal);
     this.crossingsPending = false;
@@ -357,6 +610,28 @@ export class GameApp {
     this.resetView();
     this.updateStatus();
     this.markDirty();
+  }
+
+  /**
+   * 更新通关态；刚通关时放彩花并等待再点开新局。
+   */
+  private setSolvedState(solved: boolean): void {
+    const justSolved = solved && !this.solved;
+    this.solved = solved;
+    this.graph.setSolved(solved);
+    this.updateStatus();
+    if (justSolved) {
+      this.celebrationArmed = true;
+      this.confetti.burst();
+    }
+  }
+
+  /**
+   * 清除通关庆祝层。
+   */
+  private clearCelebration(): void {
+    this.celebrationArmed = false;
+    this.confetti.clear();
   }
 
   /**
@@ -417,9 +692,7 @@ export class GameApp {
       this.crossingsPending = false;
       this.crossings.updateAfterVertexMove(this.deal, this.activeVertexId);
       this.graph.syncCrossings(this.crossings.getHotEdges());
-      this.solved = this.crossings.isSolved();
-      this.graph.setSolved(this.solved);
-      this.updateStatus();
+      this.setSolvedState(this.crossings.isSolved());
     }
 
     if (this.needsDraw) {
@@ -439,7 +712,7 @@ export class GameApp {
       return;
     }
     if (this.solved) {
-      this.statusEl.textContent = '已解开！可打开菜单继续';
+      this.statusEl.textContent = '已解开！再点一下开新局';
       return;
     }
     this.statusEl.textContent = `顶点 ${this.deal.vertices.length} · 边 ${this.deal.edges.length} · 交叉 ${this.crossings.getCrossingCount()}`;
