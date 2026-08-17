@@ -32,6 +32,7 @@ export class SvgGraphView {
     this.svg = svg;
     svg.setAttribute('role', 'img');
     svg.setAttribute('aria-label', '解缠画布');
+    svg.style.backgroundColor = DEFAULT_THEME.background;
 
     while (svg.firstChild) {
       svg.removeChild(svg.firstChild);
@@ -188,7 +189,9 @@ export class SvgGraphView {
    * 通关时切换背景提示色。
    */
   public setSolved(solved: boolean): void {
-    this.svg.style.backgroundColor = solved ? '#143022' : DEFAULT_THEME.background;
+    this.svg.style.backgroundColor = solved
+      ? DEFAULT_THEME.solvedBackground
+      : DEFAULT_THEME.background;
   }
 
   /**

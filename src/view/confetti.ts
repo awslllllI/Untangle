@@ -18,13 +18,14 @@ type Particle = {
 const COLORS = ['#ff6b6b', '#ffd93d', '#6bcBff', '#b8f2e6', '#ffa8e8', '#c3f584', '#ffffff'];
 
 /**
- * 在宿主元素上挂载彩花层，返回控制句柄。
+ * 在宿主元素上挂载彩花层（含通关操作条），返回控制句柄。
  */
 export function createConfettiLayer(host: HTMLElement): {
   burst: () => void;
   clear: () => void;
   destroy: () => void;
   readonly element: HTMLElement;
+  readonly copyResultBtn: HTMLButtonElement;
 } {
   const layer = document.createElement('div');
   layer.className = 'celebrate-layer';
@@ -34,7 +35,28 @@ export function createConfettiLayer(host: HTMLElement): {
   const canvas = document.createElement('canvas');
   canvas.className = 'celebrate-canvas';
   layer.appendChild(canvas);
+
+  const panel = document.createElement('div');
+  panel.className = 'celebrate-panel';
+  panel.innerHTML = `
+    <p class="celebrate-title">已解开！</p>
+    <p class="celebrate-hint">点空白处开新局</p>
+    <button type="button" class="menu-btn menu-btn-accent" id="copy-result">复制结果</button>
+  `;
+  layer.appendChild(panel);
   host.appendChild(layer);
+
+  const copyResultBtn = panel.querySelector<HTMLButtonElement>('#copy-result');
+  if (!copyResultBtn) {
+    throw new Error('庆祝层缺少复制结果按钮');
+  }
+  // 点击按钮不冒泡到「再点开新局」
+  copyResultBtn.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+  });
+  copyResultBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+  });
 
   const ctx = canvas.getContext('2d');
   let particles: Particle[] = [];
@@ -164,5 +186,5 @@ export function createConfettiLayer(host: HTMLElement): {
     layer.remove();
   }
 
-  return { burst, clear, destroy, element: layer };
+  return { burst, clear, destroy, element: layer, copyResultBtn };
 }

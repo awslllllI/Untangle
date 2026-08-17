@@ -6,7 +6,13 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
+    <meta
+      name="description"
+      content="解缠 Untangle：拖动顶点，消除交叉。可分享种子的解缠益智游戏。"
+    />
+    <meta name="theme-color" content="#0c121a" />
     <title>解缠 Untangle</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -43,6 +49,20 @@
 
       <div id="restart-veil" class="restart-veil" aria-hidden="true"></div>
 
+      <div id="tips-overlay" class="tips-overlay" hidden>
+        <div class="tips-card" role="dialog" aria-labelledby="tips-title" id="tips-card">
+          <h2 id="tips-title" class="tips-title">怎么玩</h2>
+          <ul class="tips-list">
+            <li>点住顶点拖动，消掉红色交叉</li>
+            <li>空白处单指平移，双指缩放</li>
+            <li>齿轮打开菜单；长按重开图标可重开本局</li>
+          </ul>
+          <button type="button" id="tips-dismiss" class="menu-btn menu-btn-accent menu-btn-block">
+            知道了
+          </button>
+        </div>
+      </div>
+
       <div id="menu-overlay" class="menu-overlay" hidden>
         <div
           class="menu-card"
@@ -54,6 +74,7 @@
           <header class="menu-header">
             <h1 id="menu-title" class="menu-title">解缠</h1>
             <p class="menu-subtitle">Untangle</p>
+            <p class="menu-tagline">拖动顶点，消除交叉</p>
           </header>
 
           <section class="menu-section" aria-labelledby="section-seed">
@@ -72,6 +93,17 @@
               <button type="button" id="copy-seed" class="menu-btn">复制</button>
               <button type="button" id="load-seed" class="menu-btn">加载</button>
             </div>
+          </section>
+
+          <section class="menu-section" aria-labelledby="section-prefs">
+            <h2 id="section-prefs" class="menu-section-title">设置</h2>
+            <label class="menu-toggle">
+              <span>音效</span>
+              <input id="sfx-toggle" type="checkbox" checked />
+            </label>
+            <button type="button" id="show-tips" class="menu-btn menu-btn-block">
+              再次显示操作提示
+            </button>
           </section>
 
           <section class="menu-section menu-section-deal" aria-labelledby="section-deal">

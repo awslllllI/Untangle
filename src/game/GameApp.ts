@@ -1,3 +1,4 @@
+import { Sfx } from '../audio/sfx';
 import { CrossingTracker } from '../core/crossings';
 import { clampVertexCount, createDeal } from '../core/generate';
 import { decodeSeed, encodeSeed } from '../core/seed';
@@ -17,9 +18,11 @@ import { SvgGraphView } from '../view/svgGraph';
 const RESTART_HOLD_MS = 1100;
 /** 长按开始时立刻给出的侵蚀进度，便于感知生效。 */
 const RESTART_VEIL_KICK = 0.12;
+/** 首次玩法提示是否已关闭。 */
+const TIPS_STORAGE_KEY = 'untangle.tips.v1';
 
 /**
- * 组装可玩循环：生成、种子、SVG、菜单、通关彩花、长按重开。
+ * 组装可玩循环：生成、种子、SVG、菜单、包装（提示/音效/分享）、长按重开。
  */
 export class GameApp {
   private readonly root: HTMLElement;
@@ -35,7 +38,10 @@ export class GameApp {
   private readonly loadSeedBtn: HTMLButtonElement;
   private readonly restartBtn: HTMLButtonElement;
   private readonly restartVeil: HTMLElement;
+  private readonly tipsOverlay: HTMLElement;
+  private readonly sfxToggle: HTMLInputElement;
   private readonly confetti: ReturnType<typeof createConfettiLayer>;
+  private readonly sfx = new Sfx();
 
   private deal: Deal;
   private solved = false;
@@ -77,6 +83,11 @@ export class GameApp {
     const vertexStepper = root.querySelector<HTMLElement>('#vertex-stepper');
     const restartBtn = root.querySelector<HTMLButtonElement>('#restart-hold');
     const restartVeil = root.querySelector<HTMLElement>('#restart-veil');
+    const tipsOverlay = root.querySelector<HTMLElement>('#tips-overlay');
+    const tipsDismiss = root.querySelector<HTMLButtonElement>('#tips-dismiss');
+    const tipsCard = root.querySelector<HTMLElement>('#tips-card');
+    const showTipsBtn = root.querySelector<HTMLButtonElement>('#show-tips');
+    const sfxToggle = root.querySelector<HTMLInputElement>('#sfx-toggle');
 
     if (
       !surface ||
@@ -94,7 +105,12 @@ export class GameApp {
       !vertexIncBtn ||
       !vertexStepper ||
       !restartBtn ||
-      !restartVeil
+      !restartVeil ||
+      !tipsOverlay ||
+      !tipsDismiss ||
+      !tipsCard ||
+      !showTipsBtn ||
+      !sfxToggle
     ) {
       throw new Error('页面缺少必要的 #game / 菜单节点');
     }
@@ -110,6 +126,8 @@ export class GameApp {
     this.loadSeedBtn = loadSeedBtn;
     this.restartBtn = restartBtn;
     this.restartVeil = restartVeil;
+    this.tipsOverlay = tipsOverlay;
+    this.sfxToggle = sfxToggle;
     this.confetti = createConfettiLayer(root);
 
     vertexCountInput.min = String(VERTEX_COUNT_MIN);
@@ -124,9 +142,22 @@ export class GameApp {
     this.solved = this.crossings.isSolved();
     this.syncSeedField();
 
+    this.sfxToggle.checked = this.sfx.isEnabled();
+    this.sfxToggle.addEventListener('change', () => {
+      this.sfx.setEnabled(this.sfxToggle.checked);
+    });
+
     menuOpenBtn.addEventListener('click', () => this.openMenu());
     menuOverlay.addEventListener('click', () => this.closeMenu());
     menuPanel.addEventListener('click', (event) => event.stopPropagation());
+
+    tipsDismiss.addEventListener('click', () => this.dismissTips(true));
+    tipsOverlay.addEventListener('click', () => this.dismissTips(true));
+    tipsCard.addEventListener('click', (event) => event.stopPropagation());
+    showTipsBtn.addEventListener('click', () => {
+      this.closeMenuWithoutApply();
+      this.showTips();
+    });
 
     rerollBtn.addEventListener('click', () => this.rerollAndReturn());
     loadSeedBtn.addEventListener('click', () => this.queueLoadSeed());
@@ -159,6 +190,9 @@ export class GameApp {
 
     this.bindRestartHold(restartBtn);
     this.confetti.element.addEventListener('pointerdown', (event) => {
+      if ((event.target as HTMLElement).closest('#copy-result')) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       if (this.celebrationArmed) {
@@ -166,6 +200,9 @@ export class GameApp {
         this.confetti.clear();
         this.reroll();
       }
+    });
+    this.confetti.copyResultBtn.addEventListener('click', () => {
+      void this.copyResult();
     });
 
     window.addEventListener('resize', () => this.resize());
@@ -177,7 +214,7 @@ export class GameApp {
   }
 
   /**
-   * 启动尺寸同步、输入与渲染循环。
+   * 启动尺寸同步、输入、首次提示与渲染循环。
    */
   public start(): void {
     if (this.running) {
@@ -208,13 +245,50 @@ export class GameApp {
         this.markDirty();
       },
       onActiveVertex: (vertexId) => {
+        if (vertexId !== null && this.activeVertexId !== vertexId) {
+          this.sfx.playDragStart();
+        }
         this.activeVertexId = vertexId;
         this.graph.setActiveVertex(this.deal, vertexId);
         this.markDirty();
       },
     });
     this.updateStatus();
+    if (localStorage.getItem(TIPS_STORAGE_KEY) !== '1') {
+      this.showTips();
+    }
     requestAnimationFrame(() => this.frame());
+  }
+
+  /**
+   * 显示玩法提示层。
+   */
+  private showTips(): void {
+    this.tipsOverlay.hidden = false;
+  }
+
+  /**
+   * 关闭玩法提示；可选写入「已看过」。
+   */
+  private dismissTips(remember: boolean): void {
+    this.tipsOverlay.hidden = true;
+    if (remember) {
+      localStorage.setItem(TIPS_STORAGE_KEY, '1');
+    }
+  }
+
+  /**
+   * 仅关菜单不应用草稿（用于从菜单再打开提示）。
+   */
+  private closeMenuWithoutApply(): void {
+    if (!this.menuOpen) {
+      return;
+    }
+    this.menuOpen = false;
+    this.menuOverlay.hidden = true;
+    this.root.classList.remove('menu-open');
+    this.pendingLoadSeed = false;
+    this.syncPendingButtons();
   }
 
   /**
@@ -265,7 +339,7 @@ export class GameApp {
    */
   private bindRestartHold(button: HTMLButtonElement): void {
     const begin = (event: PointerEvent): void => {
-      if (this.menuOpen || this.celebrationArmed) {
+      if (this.menuOpen || this.celebrationArmed || !this.tipsOverlay.hidden) {
         return;
       }
       event.preventDefault();
@@ -340,7 +414,6 @@ export class GameApp {
       }
       const elapsed = now - this.restartStartedAt;
       const t = Math.min(1, elapsed / RESTART_HOLD_MS);
-      // 前快后慢：圆先迅速胀开，后半段放慢以确认长按
       const eased = 1 - (1 - t) ** 2.6;
       const progress = RESTART_VEIL_KICK + (1 - RESTART_VEIL_KICK) * eased;
       this.paintRestartVeil(progress);
@@ -375,7 +448,6 @@ export class GameApp {
     const started = performance.now();
     const shrink = (now: number): void => {
       const u = Math.min(1, (now - started) / 200);
-      // 收回时也略偏快收
       const eased = u * u;
       this.paintRestartVeil(from * (1 - eased));
       if (u < 1) {
@@ -403,13 +475,14 @@ export class GameApp {
    * 打开菜单：填入当前局草稿，暂不改游戏状态。
    */
   private openMenu(): void {
-    if (this.celebrationArmed) {
+    if (this.celebrationArmed || !this.tipsOverlay.hidden) {
       return;
     }
     this.menuOpen = true;
     this.pendingLoadSeed = false;
     this.vertexCountInput.value = String(this.deal.vertices.length);
     this.syncSeedField();
+    this.sfxToggle.checked = this.sfx.isEnabled();
     this.syncPendingButtons();
     this.refreshMenuHint();
     this.menuOverlay.hidden = false;
@@ -560,6 +633,20 @@ export class GameApp {
   }
 
   /**
+   * 复制通关结果战报文案。
+   */
+  public async copyResult(): Promise<void> {
+    const seed = encodeSeed(this.deal.vertices.length, this.deal.generationSeed);
+    const text = `我解开了「解缠」！顶点 ${this.deal.vertices.length} · 种子 ${seed}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      this.flashStatus('结果已复制');
+    } catch {
+      this.flashStatus('无法写剪贴板，请长按手动复制');
+    }
+  }
+
+  /**
    * 重置相机使全部顶点入画。
    */
   public resetView(): void {
@@ -598,6 +685,7 @@ export class GameApp {
     this.updateStatus();
     if (justSolved) {
       this.celebrationArmed = true;
+      this.sfx.playSolved();
       this.confetti.burst();
     }
   }
@@ -688,7 +776,7 @@ export class GameApp {
       return;
     }
     if (this.solved) {
-      this.statusEl.textContent = '已解开！再点一下开新局';
+      this.statusEl.textContent = '已解开！可复制结果，或点空白开新局';
       return;
     }
     this.statusEl.textContent = `顶点 ${this.deal.vertices.length} · 边 ${this.deal.edges.length} · 交叉 ${this.crossings.getCrossingCount()}`;
