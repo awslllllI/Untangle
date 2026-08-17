@@ -315,9 +315,25 @@ body {
   gap: 0.35rem;
 }
 
-.menu-field-label {
-  font-size: 0.85rem;
-  color: #c5d2e4;
+.menu-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.menu-field textarea {
+  width: 100%;
+  min-height: 5.5rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: inherit;
+  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  resize: vertical;
 }
 
 .menu-field input[type='text'],

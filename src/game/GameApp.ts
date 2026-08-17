@@ -1,6 +1,15 @@
 import { Sfx } from '../audio/sfx';
 import { CrossingTracker } from '../core/crossings';
 import { clampVertexCount, createDeal } from '../core/generate';
+import {
+  cloneLevel,
+  dealFromLevel,
+  levelFromDeal,
+  normalizeLevel,
+  parseLevel,
+  serializeLevel,
+  type LevelDef,
+} from '../core/level';
 import { decodeSeed, encodeSeed } from '../core/seed';
 import type { Deal } from '../core/types';
 import {
@@ -8,6 +17,7 @@ import {
   VERTEX_COUNT_MIN,
   VERTEX_COUNT_PERF_HINT,
 } from '../core/types';
+import sampleDiamond from '../content/levels/sample-diamond.json';
 import { Camera } from '../view/camera';
 import { createConfettiLayer } from '../view/confetti';
 import { attachInput } from '../view/input';
@@ -40,10 +50,16 @@ export class GameApp {
   private readonly restartVeil: HTMLElement;
   private readonly tipsOverlay: HTMLElement;
   private readonly sfxToggle: HTMLInputElement;
+  private readonly levelIdInput: HTMLInputElement;
+  private readonly levelTitleInput: HTMLInputElement;
+  private readonly levelJsonInput: HTMLTextAreaElement;
+  private readonly loadLevelBtn: HTMLButtonElement;
   private readonly confetti: ReturnType<typeof createConfettiLayer>;
   private readonly sfx = new Sfx();
 
   private deal: Deal;
+  /** 若当前来自手编关卡，重开时恢复该定义；否则按种子重生。 */
+  private sourceLevel: LevelDef | null = null;
   private solved = false;
   private celebrationArmed = false;
   private activeVertexId: number | null = null;
@@ -54,6 +70,7 @@ export class GameApp {
   private statusFlash: string | null = null;
   private menuOpen = false;
   private pendingLoadSeed = false;
+  private pendingLoadLevel = false;
   private restartHolding = false;
   private restartProgress = 0;
   private restartRaf = 0;
@@ -88,6 +105,12 @@ export class GameApp {
     const tipsCard = root.querySelector<HTMLElement>('#tips-card');
     const showTipsBtn = root.querySelector<HTMLButtonElement>('#show-tips');
     const sfxToggle = root.querySelector<HTMLInputElement>('#sfx-toggle');
+    const levelIdInput = root.querySelector<HTMLInputElement>('#level-id-input');
+    const levelTitleInput = root.querySelector<HTMLInputElement>('#level-title-input');
+    const levelJsonInput = root.querySelector<HTMLTextAreaElement>('#level-json-input');
+    const exportLevelBtn = root.querySelector<HTMLButtonElement>('#export-level');
+    const loadLevelBtn = root.querySelector<HTMLButtonElement>('#load-level');
+    const loadSampleLevelBtn = root.querySelector<HTMLButtonElement>('#load-sample-level');
 
     if (
       !surface ||
@@ -110,7 +133,13 @@ export class GameApp {
       !tipsDismiss ||
       !tipsCard ||
       !showTipsBtn ||
-      !sfxToggle
+      !sfxToggle ||
+      !levelIdInput ||
+      !levelTitleInput ||
+      !levelJsonInput ||
+      !exportLevelBtn ||
+      !loadLevelBtn ||
+      !loadSampleLevelBtn
     ) {
       throw new Error('页面缺少必要的 #game / 菜单节点');
     }
@@ -128,6 +157,10 @@ export class GameApp {
     this.restartVeil = restartVeil;
     this.tipsOverlay = tipsOverlay;
     this.sfxToggle = sfxToggle;
+    this.levelIdInput = levelIdInput;
+    this.levelTitleInput = levelTitleInput;
+    this.levelJsonInput = levelJsonInput;
+    this.loadLevelBtn = loadLevelBtn;
     this.confetti = createConfettiLayer(root);
 
     vertexCountInput.min = String(VERTEX_COUNT_MIN);
@@ -164,6 +197,12 @@ export class GameApp {
     copySeedBtn.addEventListener('click', () => {
       void this.copySeed();
     });
+    exportLevelBtn.addEventListener('click', () => {
+      void this.exportLevel();
+    });
+    loadLevelBtn.addEventListener('click', () => this.queueLoadLevel());
+    loadSampleLevelBtn.addEventListener('click', () => this.loadSampleLevelAndReturn());
+    levelJsonInput.addEventListener('input', () => this.refreshMenuHint());
     vertexCountInput.addEventListener('change', () => {
       this.normalizeVertexCountInput();
       this.refreshMenuHint();
@@ -288,6 +327,7 @@ export class GameApp {
     this.menuOverlay.hidden = true;
     this.root.classList.remove('menu-open');
     this.pendingLoadSeed = false;
+    this.pendingLoadLevel = false;
     this.syncPendingButtons();
   }
 
@@ -480,6 +520,7 @@ export class GameApp {
     }
     this.menuOpen = true;
     this.pendingLoadSeed = false;
+    this.pendingLoadLevel = false;
     this.vertexCountInput.value = String(this.deal.vertices.length);
     this.syncSeedField();
     this.sfxToggle.checked = this.sfx.isEnabled();
@@ -501,6 +542,7 @@ export class GameApp {
     this.root.classList.remove('menu-open');
     this.applyMenuChanges();
     this.pendingLoadSeed = false;
+    this.pendingLoadLevel = false;
     this.syncPendingButtons();
   }
 
@@ -509,6 +551,7 @@ export class GameApp {
    */
   private rerollAndReturn(): void {
     this.pendingLoadSeed = false;
+    this.pendingLoadLevel = false;
     this.normalizeVertexCountInput();
     this.menuOpen = false;
     this.menuOverlay.hidden = true;
@@ -518,10 +561,25 @@ export class GameApp {
   }
 
   /**
-   * 在菜单里标记「加载种子」待生效。
+   * 在菜单里标记「加载种子」待生效（与加载关卡互斥）。
    */
   private queueLoadSeed(): void {
     this.pendingLoadSeed = !this.pendingLoadSeed;
+    if (this.pendingLoadSeed) {
+      this.pendingLoadLevel = false;
+    }
+    this.syncPendingButtons();
+    this.refreshMenuHint();
+  }
+
+  /**
+   * 在菜单里标记「加载关卡 JSON」待生效。
+   */
+  private queueLoadLevel(): void {
+    this.pendingLoadLevel = !this.pendingLoadLevel;
+    if (this.pendingLoadLevel) {
+      this.pendingLoadSeed = false;
+    }
     this.syncPendingButtons();
     this.refreshMenuHint();
   }
@@ -531,6 +589,7 @@ export class GameApp {
    */
   private syncPendingButtons(): void {
     this.loadSeedBtn.classList.toggle('pending', this.pendingLoadSeed);
+    this.loadLevelBtn.classList.toggle('pending', this.pendingLoadLevel);
   }
 
   /**
@@ -540,7 +599,9 @@ export class GameApp {
     const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
     const countChanged = n !== this.deal.vertices.length;
     const parts: string[] = [];
-    if (this.pendingLoadSeed) {
+    if (this.pendingLoadLevel) {
+      parts.push('将加载关卡 JSON');
+    } else if (this.pendingLoadSeed) {
       parts.push('将加载种子');
     } else if (countChanged) {
       parts.push(`将生成 ${n} 点新局`);
@@ -552,9 +613,14 @@ export class GameApp {
   }
 
   /**
-   * 退出菜单时应用草稿（不含随机一局，随机已即时返回）。
+   * 退出菜单时应用草稿（不含随机一局 / 样例关，二者已即时返回）。
    */
   private applyMenuChanges(): void {
+    if (this.pendingLoadLevel) {
+      this.loadLevelFromInput();
+      return;
+    }
+
     const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
     this.vertexCountInput.value = String(n);
     const countChanged = n !== this.deal.vertices.length;
@@ -571,6 +637,7 @@ export class GameApp {
    */
   public reroll(): void {
     this.clearCelebration();
+    this.sourceLevel = null;
     const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
     this.vertexCountInput.value = String(n);
     if (n >= VERTEX_COUNT_PERF_HINT) {
@@ -584,10 +651,15 @@ export class GameApp {
   }
 
   /**
-   * 用当前种子重建本局（布局回到初始圆）。
+   * 重开：关卡局恢复初始造型；种子局按种子重生圆布局。
    */
   private restartCurrentDeal(): void {
     this.clearCelebration();
+    if (this.sourceLevel) {
+      this.applyLevel(this.sourceLevel);
+      this.flashStatus(`已重开「${this.sourceLevel.title}」`);
+      return;
+    }
     const n = this.deal.vertices.length;
     this.vertexCountInput.value = String(n);
     this.applyDeal(createDeal(n, this.deal.generationSeed));
@@ -610,11 +682,78 @@ export class GameApp {
       this.flashStatus(`顶点数已限制为 ${n}（上限 ${VERTEX_COUNT_HARD_CAP}）`);
     }
 
+    this.sourceLevel = null;
     this.vertexCountInput.value = String(n);
     this.applyDeal(createDeal(n, payload.generationSeed));
     if (!this.statusFlash) {
       this.flashStatus('已按种子加载');
     }
+  }
+
+  /**
+   * 从关卡 JSON 文本框加载手编关。
+   */
+  private loadLevelFromInput(): void {
+    const level = parseLevel(this.levelJsonInput.value);
+    if (!level) {
+      this.flashStatus('关卡 JSON 无效');
+      return;
+    }
+    this.applyLevel(level);
+    this.flashStatus(`已加载「${level.title}」`);
+  }
+
+  /**
+   * 立即加载样例关并关菜单。
+   */
+  private loadSampleLevelAndReturn(): void {
+    const level = normalizeLevel(sampleDiamond);
+    if (!level) {
+      this.flashStatus('样例关损坏');
+      return;
+    }
+    this.pendingLoadSeed = false;
+    this.pendingLoadLevel = false;
+    this.menuOpen = false;
+    this.menuOverlay.hidden = true;
+    this.root.classList.remove('menu-open');
+    this.syncPendingButtons();
+    this.levelJsonInput.value = serializeLevel(level).trim();
+    this.levelIdInput.value = level.id;
+    this.levelTitleInput.value = level.title;
+    this.applyLevel(level);
+    this.flashStatus(`样例关「${level.title}」`);
+  }
+
+  /**
+   * 导出当前局为关卡 JSON 并复制。
+   */
+  public async exportLevel(): Promise<void> {
+    const level = levelFromDeal(this.deal, {
+      id: this.levelIdInput.value,
+      title: this.levelTitleInput.value,
+      kind: 'mainline',
+    });
+    const text = serializeLevel(level);
+    this.levelJsonInput.value = text.trim();
+    this.levelIdInput.value = level.id;
+    this.levelTitleInput.value = level.title;
+    try {
+      await navigator.clipboard.writeText(text);
+      this.flashStatus('关卡 JSON 已复制');
+    } catch {
+      this.levelJsonInput.select();
+      this.flashStatus('无法写剪贴板，请手动复制 JSON 框');
+    }
+  }
+
+  /**
+   * 应用手编关卡（记下 source 供重开）。
+   */
+  private applyLevel(level: LevelDef): void {
+    this.sourceLevel = cloneLevel(level);
+    this.vertexCountInput.value = String(level.positions.length);
+    this.applyDeal(dealFromLevel(level));
   }
 
   /**
@@ -637,7 +776,8 @@ export class GameApp {
    */
   public async copyResult(): Promise<void> {
     const seed = encodeSeed(this.deal.vertices.length, this.deal.generationSeed);
-    const text = `我解开了「解缠」！顶点 ${this.deal.vertices.length} · 种子 ${seed}`;
+    const levelBit = this.sourceLevel ? ` · 关卡 ${this.sourceLevel.id}` : ` · 种子 ${seed}`;
+    const text = `我解开了「解缠」！顶点 ${this.deal.vertices.length}${levelBit}`;
     try {
       await navigator.clipboard.writeText(text);
       this.flashStatus('结果已复制');
@@ -777,6 +917,10 @@ export class GameApp {
     }
     if (this.solved) {
       this.statusEl.textContent = '已解开！可复制结果，或点空白开新局';
+      return;
+    }
+    if (this.sourceLevel) {
+      this.statusEl.textContent = `关卡 ${this.sourceLevel.title} · 交叉 ${this.crossings.getCrossingCount()}`;
       return;
     }
     this.statusEl.textContent = `顶点 ${this.deal.vertices.length} · 边 ${this.deal.edges.length} · 交叉 ${this.crossings.getCrossingCount()}`;

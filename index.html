@@ -95,6 +95,34 @@
             </div>
           </section>
 
+          <section class="menu-section" aria-labelledby="section-level">
+            <h2 id="section-level" class="menu-section-title">关卡制作</h2>
+            <p class="menu-note">摆好造型后导出 JSON；粘贴后加载可试玩手编关。</p>
+            <label class="menu-field" for="level-id-input">
+              <span class="menu-field-label">关卡 id</span>
+              <input id="level-id-input" type="text" value="draft" spellcheck="false" autocomplete="off" />
+            </label>
+            <label class="menu-field" for="level-title-input">
+              <span class="menu-field-label">标题</span>
+              <input id="level-title-input" type="text" value="草稿关" spellcheck="false" autocomplete="off" />
+            </label>
+            <button type="button" id="export-level" class="menu-btn menu-btn-block">导出关卡</button>
+            <label class="menu-field" for="level-json-input">
+              <span class="menu-field-label">关卡 JSON</span>
+              <textarea
+                id="level-json-input"
+                rows="4"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder='粘贴 { "version": 1, ... }'
+              ></textarea>
+            </label>
+            <div class="menu-row menu-row-split">
+              <button type="button" id="load-level" class="menu-btn">加载关卡</button>
+              <button type="button" id="load-sample-level" class="menu-btn">样例关</button>
+            </div>
+          </section>
+
           <section class="menu-section" aria-labelledby="section-prefs">
             <h2 id="section-prefs" class="menu-section-title">设置</h2>
             <label class="menu-toggle">
