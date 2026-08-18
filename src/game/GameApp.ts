@@ -18,6 +18,23 @@ import {
   VERTEX_COUNT_PERF_HINT,
 } from '../core/types';
 import sampleDiamond from '../content/levels/sample-diamond.json';
+import {
+  CAMPAIGN_CATALOG,
+  getMainlineCount,
+  getMainlineLevel,
+  getMainlineMeta,
+  getSkinDemoLevel,
+} from '../content/campaign';
+import {
+  canPlayMainlineIndex,
+  isFreeModeUnlocked,
+  isSkinDemoUnlocked,
+  loadProgress,
+  recordMainlineClear,
+  recordSkinDemoClear,
+  saveProgress,
+  type CampaignProgress,
+} from './progress';
 import { Camera } from '../view/camera';
 import { createConfettiLayer } from '../view/confetti';
 import { attachInput } from '../view/input';
@@ -30,6 +47,9 @@ const RESTART_HOLD_MS = 1100;
 const RESTART_VEIL_KICK = 0.12;
 /** 首次玩法提示是否已关闭。 */
 const TIPS_STORAGE_KEY = 'untangle.tips.v1';
+
+/** 当前对局来源：主线 / 皮肤演示 / 自由随机。 */
+type SessionKind = 'mainline' | 'skin_demo' | 'free';
 
 /**
  * 组装可玩循环：生成、种子、SVG、菜单、包装（提示/音效/分享）、长按重开。
@@ -54,12 +74,27 @@ export class GameApp {
   private readonly levelTitleInput: HTMLInputElement;
   private readonly levelJsonInput: HTMLTextAreaElement;
   private readonly loadLevelBtn: HTMLButtonElement;
+  private readonly campaignHub: HTMLElement;
+  private readonly campaignProgressText: HTMLElement;
+  private readonly mainlineList: HTMLUListElement;
+  private readonly campaignSkinSection: HTMLElement;
+  private readonly campaignSkinLock: HTMLElement;
+  private readonly playSkinDemoBtn: HTMLButtonElement;
+  private readonly campaignFreeSection: HTMLElement;
+  private readonly campaignFreeLock: HTMLElement;
+  private readonly playFreeModeBtn: HTMLButtonElement;
+  private readonly gatedMenuSections: HTMLElement[];
   private readonly confetti: ReturnType<typeof createConfettiLayer>;
   private readonly sfx = new Sfx();
 
   private deal: Deal;
   /** 若当前来自手编关卡，重开时恢复该定义；否则按种子重生。 */
   private sourceLevel: LevelDef | null = null;
+  private sessionKind: SessionKind = 'mainline';
+  /** 主线当前关序号（1-based）。 */
+  private campaignMainlineIndex = 1;
+  private progress: CampaignProgress;
+  private hubOpen = false;
   private solved = false;
   private celebrationArmed = false;
   private activeVertexId: number | null = null;
@@ -111,6 +146,20 @@ export class GameApp {
     const exportLevelBtn = root.querySelector<HTMLButtonElement>('#export-level');
     const loadLevelBtn = root.querySelector<HTMLButtonElement>('#load-level');
     const loadSampleLevelBtn = root.querySelector<HTMLButtonElement>('#load-sample-level');
+    const campaignHub = root.querySelector<HTMLElement>('#campaign-hub');
+    const campaignPanel = root.querySelector<HTMLElement>('#campaign-panel');
+    const campaignProgressText = root.querySelector<HTMLElement>('#campaign-progress-text');
+    const mainlineList = root.querySelector<HTMLUListElement>('#mainline-list');
+    const campaignSkinSection = root.querySelector<HTMLElement>('#campaign-skin-section');
+    const campaignSkinLock = root.querySelector<HTMLElement>('#campaign-skin-lock');
+    const playSkinDemoBtn = root.querySelector<HTMLButtonElement>('#play-skin-demo');
+    const campaignFreeSection = root.querySelector<HTMLElement>('#campaign-free-section');
+    const campaignFreeLock = root.querySelector<HTMLElement>('#campaign-free-lock');
+    const playFreeModeBtn = root.querySelector<HTMLButtonElement>('#play-free-mode');
+    const openCampaignHubBtn = root.querySelector<HTMLButtonElement>('#open-campaign-hub');
+    const gatedMenuSections = Array.from(
+      root.querySelectorAll<HTMLElement>('.menu-section-gated'),
+    );
 
     if (
       !surface ||
@@ -139,7 +188,18 @@ export class GameApp {
       !levelJsonInput ||
       !exportLevelBtn ||
       !loadLevelBtn ||
-      !loadSampleLevelBtn
+      !loadSampleLevelBtn ||
+      !campaignHub ||
+      !campaignPanel ||
+      !campaignProgressText ||
+      !mainlineList ||
+      !campaignSkinSection ||
+      !campaignSkinLock ||
+      !playSkinDemoBtn ||
+      !campaignFreeSection ||
+      !campaignFreeLock ||
+      !playFreeModeBtn ||
+      !openCampaignHubBtn
     ) {
       throw new Error('页面缺少必要的 #game / 菜单节点');
     }
@@ -161,14 +221,32 @@ export class GameApp {
     this.levelTitleInput = levelTitleInput;
     this.levelJsonInput = levelJsonInput;
     this.loadLevelBtn = loadLevelBtn;
+    this.campaignHub = campaignHub;
+    this.campaignProgressText = campaignProgressText;
+    this.mainlineList = mainlineList;
+    this.campaignSkinSection = campaignSkinSection;
+    this.campaignSkinLock = campaignSkinLock;
+    this.playSkinDemoBtn = playSkinDemoBtn;
+    this.campaignFreeSection = campaignFreeSection;
+    this.campaignFreeLock = campaignFreeLock;
+    this.playFreeModeBtn = playFreeModeBtn;
+    this.gatedMenuSections = gatedMenuSections;
     this.confetti = createConfettiLayer(root);
 
     vertexCountInput.min = String(VERTEX_COUNT_MIN);
     vertexCountInput.max = String(VERTEX_COUNT_HARD_CAP);
 
-    const initialCount = clampVertexCount(Number(vertexCountInput.value) || 8);
-    vertexCountInput.value = String(initialCount);
-    this.deal = createDeal(initialCount);
+    this.progress = loadProgress();
+    const resumeIndex = Math.min(this.progress.mainlineCleared + 1, getMainlineCount());
+    const resumeLevel = getMainlineLevel(resumeIndex);
+    if (!resumeLevel) {
+      throw new Error('战役主线关卡缺失');
+    }
+    this.sessionKind = 'mainline';
+    this.campaignMainlineIndex = resumeIndex;
+    this.sourceLevel = cloneLevel(resumeLevel);
+    this.deal = dealFromLevel(resumeLevel);
+    this.vertexCountInput.value = String(resumeLevel.positions.length);
     this.crossings.rebuild(this.deal);
     this.graph.rebuild(this.deal);
     this.graph.syncCrossings(this.crossings.getHotEdges());
@@ -183,6 +261,15 @@ export class GameApp {
     menuOpenBtn.addEventListener('click', () => this.openMenu());
     menuOverlay.addEventListener('click', () => this.closeMenu());
     menuPanel.addEventListener('click', (event) => event.stopPropagation());
+
+    openCampaignHubBtn.addEventListener('click', () => {
+      this.closeMenuWithoutApply();
+      this.openHub();
+    });
+    campaignHub.addEventListener('click', () => this.closeHub());
+    campaignPanel.addEventListener('click', (event) => event.stopPropagation());
+    playSkinDemoBtn.addEventListener('click', () => this.startSkinDemo());
+    playFreeModeBtn.addEventListener('click', () => this.startFreeMode());
 
     tipsDismiss.addEventListener('click', () => this.dismissTips(true));
     tipsOverlay.addEventListener('click', () => this.dismissTips(true));
@@ -235,9 +322,7 @@ export class GameApp {
       event.preventDefault();
       event.stopPropagation();
       if (this.celebrationArmed) {
-        this.celebrationArmed = false;
-        this.confetti.clear();
-        this.reroll();
+        this.onCelebrationContinue();
       }
     });
     this.confetti.copyResultBtn.addEventListener('click', () => {
@@ -293,10 +378,203 @@ export class GameApp {
       },
     });
     this.updateStatus();
+    this.hubOpen = true;
     if (localStorage.getItem(TIPS_STORAGE_KEY) !== '1') {
       this.showTips();
+    } else {
+      this.openHub();
     }
     requestAnimationFrame(() => this.frame());
+  }
+
+  /**
+   * 通关庆祝层上点空白后的后续：进下一关、回选关或自由模式新局。
+   */
+  private onCelebrationContinue(): void {
+    this.celebrationArmed = false;
+    this.confetti.clear();
+    if (this.sessionKind === 'mainline') {
+      const total = getMainlineCount();
+      if (this.campaignMainlineIndex < total) {
+        this.startMainline(this.campaignMainlineIndex + 1, false);
+        return;
+      }
+      this.openHub();
+      return;
+    }
+    if (this.sessionKind === 'skin_demo') {
+      this.openHub();
+      return;
+    }
+    this.reroll();
+  }
+
+  /**
+   * 打开战役选关 hub 并刷新列表与解锁态。
+   */
+  private openHub(): void {
+    this.hubOpen = true;
+    this.campaignHub.hidden = false;
+    this.refreshCampaignHub();
+  }
+
+  /**
+   * 关闭战役 hub（不切换当前局）。
+   */
+  private closeHub(): void {
+    if (!this.hubOpen) {
+      return;
+    }
+    this.hubOpen = false;
+    this.campaignHub.hidden = true;
+  }
+
+  /**
+   * 根据进度重绘主线列表与皮肤/自由模式入口。
+   */
+  private refreshCampaignHub(): void {
+    const total = getMainlineCount();
+    this.campaignProgressText.textContent = `进度 ${this.progress.mainlineCleared} / ${total}`;
+    this.mainlineList.replaceChildren();
+
+    for (let index = 1; index <= total; index += 1) {
+      const meta = getMainlineMeta(index);
+      if (!meta) {
+        continue;
+      }
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'campaign-level-btn';
+      const cleared = index <= this.progress.mainlineCleared;
+      const playable = canPlayMainlineIndex(this.progress, index);
+      const isCurrent =
+        this.sessionKind === 'mainline' && index === this.campaignMainlineIndex && !this.hubOpen;
+
+      if (cleared) {
+        btn.classList.add('is-cleared');
+      }
+      if (isCurrent) {
+        btn.classList.add('is-current');
+      }
+      btn.disabled = !playable;
+
+      const indexEl = document.createElement('span');
+      indexEl.className = 'campaign-level-index';
+      indexEl.textContent = String(index);
+
+      const titleEl = document.createElement('span');
+      titleEl.className = 'campaign-level-title';
+      titleEl.textContent = meta.title;
+
+      const badgeEl = document.createElement('span');
+      badgeEl.className = 'campaign-level-badge';
+      if (cleared) {
+        badgeEl.textContent = '已通关';
+      } else if (!playable) {
+        badgeEl.textContent = '未解锁';
+      } else if (isCurrent) {
+        badgeEl.textContent = '进行中';
+      }
+
+      btn.append(indexEl, titleEl, badgeEl);
+      btn.addEventListener('click', () => this.startMainline(index));
+      li.appendChild(btn);
+      this.mainlineList.appendChild(li);
+    }
+
+    const skinUnlocked = isSkinDemoUnlocked(
+      this.progress,
+      CAMPAIGN_CATALOG.unlockSkinDemoAfterMainlineIndex,
+    );
+    this.campaignSkinSection.classList.toggle('is-locked', !skinUnlocked);
+    this.playSkinDemoBtn.disabled = !skinUnlocked;
+    this.campaignSkinLock.hidden = skinUnlocked;
+    if (this.progress.skinDemoCleared) {
+      this.playSkinDemoBtn.textContent = '再玩皮肤演示';
+    } else {
+      this.playSkinDemoBtn.textContent = '试玩皮肤演示';
+    }
+
+    const freeUnlocked = isFreeModeUnlocked(
+      this.progress,
+      CAMPAIGN_CATALOG.unlockFreeModeAfterMainlineIndex,
+    );
+    this.campaignFreeSection.classList.toggle('is-locked', !freeUnlocked);
+    this.playFreeModeBtn.disabled = !freeUnlocked;
+    this.campaignFreeLock.hidden = freeUnlocked;
+  }
+
+  /**
+   * 开始主线第 index 关（1-based）；fromHub 为 false 时表示庆祝后自动续关。
+   */
+  private startMainline(index: number, fromHub = true): void {
+    if (fromHub && !canPlayMainlineIndex(this.progress, index)) {
+      this.flashStatus('该关尚未解锁');
+      return;
+    }
+    const level = getMainlineLevel(index);
+    if (!level) {
+      this.flashStatus('关卡不存在');
+      return;
+    }
+    this.sessionKind = 'mainline';
+    this.campaignMainlineIndex = index;
+    this.applyLevel(level);
+    if (fromHub) {
+      this.closeHub();
+    }
+    this.flashStatus(`主线 ${index} · ${level.title}`);
+  }
+
+  /**
+   * 开始皮肤演示关。
+   */
+  private startSkinDemo(): void {
+    if (
+      !isSkinDemoUnlocked(this.progress, CAMPAIGN_CATALOG.unlockSkinDemoAfterMainlineIndex)
+    ) {
+      this.flashStatus('通关主线第 5 关后解锁');
+      return;
+    }
+    const level = getSkinDemoLevel();
+    if (!level) {
+      this.flashStatus('皮肤演示关缺失');
+      return;
+    }
+    this.sessionKind = 'skin_demo';
+    this.applyLevel(level);
+    this.closeHub();
+    this.flashStatus(`皮肤演示 · ${level.title}`);
+  }
+
+  /**
+   * 进入自由随机模式（须已解锁）。
+   */
+  private startFreeMode(): void {
+    if (
+      !isFreeModeUnlocked(this.progress, CAMPAIGN_CATALOG.unlockFreeModeAfterMainlineIndex)
+    ) {
+      this.flashStatus('通关全部主线后解锁');
+      return;
+    }
+    this.sessionKind = 'free';
+    this.closeHub();
+    this.reroll();
+  }
+
+  /**
+   * 按是否自由模式显示种子/本局/关卡制作菜单段。
+   */
+  private refreshMenuSections(): void {
+    const freeUnlocked = isFreeModeUnlocked(
+      this.progress,
+      CAMPAIGN_CATALOG.unlockFreeModeAfterMainlineIndex,
+    );
+    const showFreeTools = freeUnlocked && this.sessionKind === 'free';
+    for (const section of this.gatedMenuSections) {
+      section.hidden = !showFreeTools;
+    }
   }
 
   /**
@@ -313,6 +591,9 @@ export class GameApp {
     this.tipsOverlay.hidden = true;
     if (remember) {
       localStorage.setItem(TIPS_STORAGE_KEY, '1');
+    }
+    if (this.hubOpen) {
+      this.openHub();
     }
   }
 
@@ -515,7 +796,7 @@ export class GameApp {
    * 打开菜单：填入当前局草稿，暂不改游戏状态。
    */
   private openMenu(): void {
-    if (this.celebrationArmed || !this.tipsOverlay.hidden) {
+    if (this.celebrationArmed || !this.tipsOverlay.hidden || !this.campaignHub.hidden) {
       return;
     }
     this.menuOpen = true;
@@ -525,6 +806,7 @@ export class GameApp {
     this.syncSeedField();
     this.sfxToggle.checked = this.sfx.isEnabled();
     this.syncPendingButtons();
+    this.refreshMenuSections();
     this.refreshMenuHint();
     this.menuOverlay.hidden = false;
     this.root.classList.add('menu-open');
@@ -638,6 +920,7 @@ export class GameApp {
   public reroll(): void {
     this.clearCelebration();
     this.sourceLevel = null;
+    this.sessionKind = 'free';
     const n = clampVertexCount(Number(this.vertexCountInput.value) || 8);
     this.vertexCountInput.value = String(n);
     if (n >= VERTEX_COUNT_PERF_HINT) {
@@ -682,6 +965,7 @@ export class GameApp {
       this.flashStatus(`顶点数已限制为 ${n}（上限 ${VERTEX_COUNT_HARD_CAP}）`);
     }
 
+    this.sessionKind = 'free';
     this.sourceLevel = null;
     this.vertexCountInput.value = String(n);
     this.applyDeal(createDeal(n, payload.generationSeed));
@@ -699,6 +983,7 @@ export class GameApp {
       this.flashStatus('关卡 JSON 无效');
       return;
     }
+    this.sessionKind = 'free';
     this.applyLevel(level);
     this.flashStatus(`已加载「${level.title}」`);
   }
@@ -721,6 +1006,7 @@ export class GameApp {
     this.levelJsonInput.value = serializeLevel(level).trim();
     this.levelIdInput.value = level.id;
     this.levelTitleInput.value = level.title;
+    this.sessionKind = 'free';
     this.applyLevel(level);
     this.flashStatus(`样例关「${level.title}」`);
   }
@@ -826,6 +1112,22 @@ export class GameApp {
     if (justSolved) {
       this.celebrationArmed = true;
       this.sfx.playSolved();
+      if (this.sessionKind === 'mainline') {
+        this.progress = recordMainlineClear(this.progress, this.campaignMainlineIndex);
+        saveProgress(this.progress);
+        const total = getMainlineCount();
+        if (this.campaignMainlineIndex >= total) {
+          this.confetti.setHint('点空白返回选关 · 自由模式已解锁');
+        } else {
+          this.confetti.setHint('点空白进入下一关');
+        }
+      } else if (this.sessionKind === 'skin_demo') {
+        this.progress = recordSkinDemoClear(this.progress);
+        saveProgress(this.progress);
+        this.confetti.setHint('点空白返回选关');
+      } else {
+        this.confetti.setHint('点空白处开新局');
+      }
       this.confetti.burst();
     }
   }
@@ -835,6 +1137,7 @@ export class GameApp {
    */
   private clearCelebration(): void {
     this.celebrationArmed = false;
+    this.confetti.resetHint();
     this.confetti.clear();
   }
 
@@ -916,10 +1219,29 @@ export class GameApp {
       return;
     }
     if (this.solved) {
-      this.statusEl.textContent = '已解开！可复制结果，或点空白开新局';
+      if (this.sessionKind === 'mainline') {
+        const total = getMainlineCount();
+        if (this.campaignMainlineIndex >= total) {
+          this.statusEl.textContent = '主线通关！可复制结果，或点空白返回选关';
+        } else {
+          this.statusEl.textContent = '已解开！可复制结果，或点空白进入下一关';
+        }
+      } else if (this.sessionKind === 'skin_demo') {
+        this.statusEl.textContent = '已解开！可复制结果，或点空白返回选关';
+      } else {
+        this.statusEl.textContent = '已解开！可复制结果，或点空白开新局';
+      }
       return;
     }
     if (this.sourceLevel) {
+      if (this.sessionKind === 'mainline') {
+        this.statusEl.textContent = `主线 ${this.campaignMainlineIndex}/${getMainlineCount()} · ${this.sourceLevel.title} · 交叉 ${this.crossings.getCrossingCount()}`;
+        return;
+      }
+      if (this.sessionKind === 'skin_demo') {
+        this.statusEl.textContent = `皮肤演示 · ${this.sourceLevel.title} · 交叉 ${this.crossings.getCrossingCount()}`;
+        return;
+      }
       this.statusEl.textContent = `关卡 ${this.sourceLevel.title} · 交叉 ${this.crossings.getCrossingCount()}`;
       return;
     }

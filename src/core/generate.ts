@@ -6,6 +6,15 @@ import { VERTEX_COUNT_HARD_CAP, VERTEX_COUNT_MIN } from './types';
 const CIRCLE_RADIUS = 400;
 
 /**
+ * 生成保证可解的平面图边集（供关卡制作；坐标另排）。
+ */
+export function createPlanarEdges(vertexCount: number, seed: number): Edge[] {
+  const n = clampVertexCount(vertexCount);
+  const rng = createRng(seed);
+  return buildPlanarEdges(n, rng);
+}
+
+/**
  * 生成一局保证可解的解缠：平面图边集 + 圆上布局。
  */
 export function createDeal(vertexCount: number, seed: number = randomSeed()): Deal {

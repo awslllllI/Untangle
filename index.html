@@ -49,6 +49,47 @@
 
       <div id="restart-veil" class="restart-veil" aria-hidden="true"></div>
 
+      <div id="campaign-hub" class="campaign-hub" hidden>
+        <div
+          class="menu-card campaign-card"
+          id="campaign-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="campaign-title"
+        >
+          <header class="menu-header">
+            <h1 id="campaign-title" class="menu-title">战役</h1>
+            <p class="menu-subtitle">主线解缠</p>
+            <p class="menu-tagline" id="campaign-progress-text">进度 0 / 10</p>
+          </header>
+
+          <section class="menu-section" aria-labelledby="campaign-mainline-title">
+            <h2 id="campaign-mainline-title" class="menu-section-title">主线</h2>
+            <ul id="mainline-list" class="campaign-level-list"></ul>
+          </section>
+
+          <section class="menu-section" id="campaign-skin-section" aria-labelledby="campaign-skin-title">
+            <h2 id="campaign-skin-title" class="menu-section-title">皮肤演示</h2>
+            <p class="menu-note" id="campaign-skin-lock">通关主线第 5 关后解锁</p>
+            <button type="button" id="play-skin-demo" class="menu-btn menu-btn-block" disabled>
+              试玩皮肤演示
+            </button>
+          </section>
+
+          <section class="menu-section" id="campaign-free-section" aria-labelledby="campaign-free-title">
+            <h2 id="campaign-free-title" class="menu-section-title">自由模式</h2>
+            <p class="menu-note" id="campaign-free-lock">通关全部主线后解锁</p>
+            <button type="button" id="play-free-mode" class="menu-btn menu-btn-block menu-btn-accent" disabled>
+              随机一局
+            </button>
+          </section>
+
+          <footer class="menu-footer">
+            <p class="menu-hint">选关开始；点外空白继续当前局</p>
+          </footer>
+        </div>
+      </div>
+
       <div id="tips-overlay" class="tips-overlay" hidden>
         <div class="tips-card" role="dialog" aria-labelledby="tips-title" id="tips-card">
           <h2 id="tips-title" class="tips-title">怎么玩</h2>
@@ -77,7 +118,13 @@
             <p class="menu-tagline">拖动顶点，消除交叉</p>
           </header>
 
-          <section class="menu-section" aria-labelledby="section-seed">
+          <section class="menu-section" aria-labelledby="section-campaign-nav">
+            <button type="button" id="open-campaign-hub" class="menu-btn menu-btn-block menu-btn-accent">
+              返回选关
+            </button>
+          </section>
+
+          <section class="menu-section menu-section-gated" aria-labelledby="section-seed">
             <h2 id="section-seed" class="menu-section-title">种子</h2>
             <label class="menu-field" for="seed-input">
               <span class="menu-field-label">分享码</span>
@@ -95,7 +142,7 @@
             </div>
           </section>
 
-          <section class="menu-section" aria-labelledby="section-level">
+          <section class="menu-section menu-section-gated" aria-labelledby="section-level">
             <h2 id="section-level" class="menu-section-title">关卡制作</h2>
             <p class="menu-note">摆好造型后导出 JSON；粘贴后加载可试玩手编关。</p>
             <label class="menu-field" for="level-id-input">
@@ -134,7 +181,7 @@
             </button>
           </section>
 
-          <section class="menu-section menu-section-deal" aria-labelledby="section-deal">
+          <section class="menu-section menu-section-deal menu-section-gated" aria-labelledby="section-deal">
             <h2 id="section-deal" class="menu-section-title">本局</h2>
             <div class="menu-field">
               <span class="menu-field-label" id="vertex-count-label">顶点数</span>

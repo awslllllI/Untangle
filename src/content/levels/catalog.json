@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "mainline": [
+    "main-01",
+    "main-02",
+    "main-03",
+    "main-04",
+    "main-05",
+    "main-06",
+    "main-07",
+    "main-08",
+    "main-09",
+    "main-10"
+  ],
+  "unlockSkinDemoAfterMainlineIndex": 5,
+  "unlockFreeModeAfterMainlineIndex": 10,
+  "skinDemoId": "skin-demo-01"
+}

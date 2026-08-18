@@ -24,6 +24,8 @@ export function createConfettiLayer(host: HTMLElement): {
   burst: () => void;
   clear: () => void;
   destroy: () => void;
+  setHint: (text: string) => void;
+  resetHint: () => void;
   readonly element: HTMLElement;
   readonly copyResultBtn: HTMLButtonElement;
 } {
@@ -47,9 +49,11 @@ export function createConfettiLayer(host: HTMLElement): {
   host.appendChild(layer);
 
   const copyResultBtn = panel.querySelector<HTMLButtonElement>('#copy-result');
-  if (!copyResultBtn) {
-    throw new Error('庆祝层缺少复制结果按钮');
+  const hintEl = panel.querySelector<HTMLElement>('.celebrate-hint');
+  if (!copyResultBtn || !hintEl) {
+    throw new Error('庆祝层缺少复制结果或提示节点');
   }
+  const celebrateHint = hintEl;
   // 点击按钮不冒泡到「再点开新局」
   copyResultBtn.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
@@ -179,6 +183,20 @@ export function createConfettiLayer(host: HTMLElement): {
   }
 
   /**
+   * 更新通关后空白处点击的提示文案。
+   */
+  function setHint(text: string): void {
+    celebrateHint.textContent = text;
+  }
+
+  /**
+   * 恢复默认提示文案。
+   */
+  function resetHint(): void {
+    celebrateHint.textContent = '点空白处开新局';
+  }
+
+  /**
    * 卸载 DOM 与动画。
    */
   function destroy(): void {
@@ -186,5 +204,5 @@ export function createConfettiLayer(host: HTMLElement): {
     layer.remove();
   }
 
-  return { burst, clear, destroy, element: layer, copyResultBtn };
+  return { burst, clear, destroy, element: layer, copyResultBtn, setHint, resetHint };
 }
